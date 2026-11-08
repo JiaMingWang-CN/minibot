@@ -1,0 +1,6 @@
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","delta":"部分"}
+
+event: response.failed
+data: {"type":"response.failed","response":{"status":"failed","error":{"code":"server_error","message":"服务端错误"}}}
+

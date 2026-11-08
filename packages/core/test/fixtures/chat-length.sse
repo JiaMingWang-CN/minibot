@@ -1,0 +1,6 @@
+data: {"id":"c2","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":"很长的"},"finish_reason":null}]}
+
+data: {"id":"c2","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":"回答"},"finish_reason":"length"}]}
+
+data: [DONE]
+

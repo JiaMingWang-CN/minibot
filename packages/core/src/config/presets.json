@@ -1,0 +1,98 @@
+{
+  "presets": [
+    {
+      "id": "custom-chat",
+      "name": "OpenAI Chat Completions 自定义",
+      "format": "chat_completions",
+      "baseUrl": "",
+      "note": "上下文窗口未核实，请按实际模型填写",
+      "contextWindow": 128000,
+      "thinkingLevels": ["off", "none", "minimal", "low", "medium", "high", "xhigh", "max"]
+    },
+    {
+      "id": "custom-responses",
+      "name": "OpenAI Responses 自定义",
+      "format": "responses",
+      "baseUrl": "",
+      "note": "上下文窗口未核实，请按实际模型填写",
+      "contextWindow": 128000,
+      "thinkingLevels": ["off", "none", "minimal", "low", "medium", "high", "xhigh", "max"]
+    },
+    {
+      "id": "custom-anthropic",
+      "name": "Anthropic 自定义",
+      "format": "anthropic_messages",
+      "baseUrl": "",
+      "note": "上下文窗口未核实，请按实际模型填写",
+      "contextWindow": 128000,
+      "thinkingLevels": ["off", "low", "medium", "high", "xhigh", "max"]
+    },
+    {
+      "id": "deepseek",
+      "name": "DeepSeek",
+      "format": "chat_completions",
+      "baseUrl": "https://api.deepseek.com",
+      "note": "",
+      "contextWindow": 1000000,
+      "thinkingLevels": ["off", "low", "high", "max"]
+    },
+    {
+      "id": "volc-coding",
+      "name": "火山 Coding Plan",
+      "format": "responses",
+      "baseUrl": "https://ark.cn-beijing.volces.com/api/coding/v3",
+      "note": "用 Coding Plan 专属 Key。**必须是 coding 路径**，普通方舟地址 `/api/v3` 不扣套餐额度、另行计费。官方 Codex 示例用 Responses；Chat Completions 仅见于一篇旧文章（模型 `doubao-seed-code`），**须先实测**连通与工具调用，通过后再切换默认格式。模型可填具体名（如 `doubao-seed-2.1-pro`、`glm-5.3`、`deepseek-v4-pro`、`kimi-k3`）或 `ark-code-latest`（在控制台切换，3–5 分钟生效）",
+      "contextWindow": 256000,
+      "modelSet": "volc",
+      "thinkingLevels": ["low", "medium", "high"]
+    },
+    {
+      "id": "volc-coding-anthropic",
+      "name": "火山 Coding Plan（Anthropic）",
+      "format": "anthropic_messages",
+      "baseUrl": "https://ark.cn-beijing.volces.com/api/coding",
+      "note": "同上 Key 与模型",
+      "contextWindow": 256000,
+      "modelSet": "volc",
+      "thinkingLevels": []
+    },
+    {
+      "id": "volc-agent",
+      "name": "火山 Agent Plan",
+      "format": "responses",
+      "baseUrl": "https://ark.cn-beijing.volces.com/api/plan/v3",
+      "note": "需 Agent Plan **专属 Key**（Coding Plan 的 Key 不通用）；官方文档强调其他 Base URL 无法在 Agent Plan 中使用。官方示例为 Responses，Chat Completions 须先实测；默认模型 `ark-code-latest`，可用模型随套餐档位不同",
+      "contextWindow": 256000,
+      "modelSet": "volc",
+      "thinkingLevels": ["low", "medium", "high"]
+    },
+    {
+      "id": "volc-agent-anthropic",
+      "name": "火山 Agent Plan（Anthropic）",
+      "format": "anthropic_messages",
+      "baseUrl": "https://ark.cn-beijing.volces.com/api/plan",
+      "note": "同上 Key",
+      "contextWindow": 256000,
+      "modelSet": "volc",
+      "thinkingLevels": []
+    }
+  ],
+  "modelSets": {
+    "volc": [
+      { "id": "doubao-seed-2.1-pro", "contextWindow": 1024000, "thinkingLevels": ["off", "low", "medium", "high"] },
+      { "id": "doubao-seed-2.1-lite", "contextWindow": 1024000, "thinkingLevels": ["off", "low", "medium", "high"] },
+      { "id": "doubao-seed-evolving", "contextWindow": 1024000, "thinkingLevels": ["off", "low", "medium", "high"] },
+      { "id": "doubao-seed-2.0-mini", "contextWindow": 256000, "thinkingLevels": ["off", "low", "medium", "high"] },
+      { "id": "glm-5.3", "contextWindow": 1024000 },
+      { "id": "glm-latest", "contextWindow": 1024000 },
+      { "id": "glm-5.3-flash", "contextWindow": 1024000, "thinkingLevels": ["low", "high", "max"] },
+      { "id": "deepseek-v4-flash", "contextWindow": 1024000, "thinkingLevels": ["off", "low", "high", "max"] },
+      { "id": "deepseek-v4-pro", "contextWindow": 1024000, "thinkingLevels": ["off", "low", "high", "max"] },
+      { "id": "deepseek-v4.1-flash", "contextWindow": 1024000, "thinkingLevels": ["off", "low", "high", "max"] },
+      { "id": "deepseek-v4.1-flash-economy", "contextWindow": 1024000, "thinkingLevels": ["off", "low", "high", "max"] },
+      { "id": "kimi-k2.8-preview", "contextWindow": 1024000 },
+      { "id": "kimi-k3", "contextWindow": 1024000 },
+      { "id": "kimi-k3.1-pro", "contextWindow": 1024000, "thinkingLevels": ["low", "high", "max"] }
+    ]
+  }
+}

@@ -1,0 +1,351 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { dataPaths } from '../src/paths.ts';
+import { openDb } from '../src/db/db.ts';
+import { createThread } from '../src/db/threads.ts';
+import { appendMessage } from '../src/db/messages.ts';
+import { Kernel, KernelError } from '../src/kernel.ts';
+import type { KernelEvent } from '../src/events.ts';
+import type { KeyCrypto } from '../src/secrets/store.ts';
+import { AbortedError } from '../src/model/types.ts';
+import type { CallModel } from '../src/model/client.ts';
+import type { Block } from '../src/model/types.ts';
+import { CANCELLED_TEXT } from '../src/db/messages.ts';
+
+function fakeCrypto(backend = 'os'): KeyCrypto {
+  return {
+    backend: () => backend,
+    encrypt: (plain) => Buffer.concat([Buffer.from('enc:'), Buffer.from(Buffer.from(plain).toString('base64'))]),
+    decrypt: (buf) => Buffer.from(buf.toString('utf8').slice(4), 'base64').toString('utf8'),
+  };
+}
+
+async function tmpRoot(): Promise<string> {
+  return fs.mkdtemp(path.join(os.tmpdir(), 'minibot-kernel-'));
+}
+
+function echoModel(text = '你好'): CallModel {
+  return async ({ onDelta }) => {
+    onDelta({ type: 'text', text });
+    return {
+      blocks: [{ type: 'text', text }],
+      stopReason: 'end',
+      usage: { inputTokens: 5, outputTokens: 1 },
+    };
+  };
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
+  const started = Date.now();
+  while (!predicate()) {
+    if (Date.now() - started > timeoutMs) throw new Error('等待超时');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+test('open 时执行 repairDanglingToolUses', async () => {
+  const root = await tmpRoot();
+  const paths = dataPaths(root);
+  const db = openDb(paths.db);
+  const thread = createThread(db, 'b1', 't');
+  appendMessage(db, {
+    threadId: thread.id,
+    role: 'assistant',
+    blocks: [{ type: 'tool_use', id: 'tu_dangling', name: 'read_file', input: { path: 'x' } }],
+    kind: null,
+    interrupted: true,
+  });
+  db.close();
+  const kernel = await Kernel.open({ dataRoot: root, crypto: fakeCrypto(), callModel: echoModel() });
+  const messages = kernel.listMessages(thread.id);
+  const last = messages[messages.length - 1]!;
+  assert.equal(last.role, 'user');
+  assert.deepEqual(last.blocks, [
+    { type: 'tool_result', toolUseId: 'tu_dangling', content: CANCELLED_TEXT, status: 'cancelled' },
+  ]);
+  await kernel.close();
+});
+
+test('onboarding：设定为空时随机生成；工作目录为空时用默认目录并创建；写入 user.md；设为主 bot；新 bot 默认 approvalMode "ask"', async () => {
+  const root = await tmpRoot();
+  const kernel = await Kernel.open({ dataRoot: root, crypto: fakeCrypto(), callModel: echoModel() });
+  const provider = await kernel.addProvider({
+    name: 'P',
+    format: 'chat_completions',
+    baseUrl: 'http://127.0.0.1:1',
+    apiKey: 'sk-onboard-secret-123',
+  });
+  const bot = await kernel.completeOnboarding({
+    providerId: provider.id,
+    model: 'm',
+    profile: '我喜欢喝咖啡。',
+  });
+  assert.ok(bot.name.length > 0);
+  assert.ok(bot.persona.length > 0);
+  assert.equal(bot.approvalMode, 'ask');
+  const paths = dataPaths(root);
+  const workspace = paths.defaultWorkspace(bot.id);
+  assert.equal((await fs.stat(workspace)).isDirectory(), true);
+  assert.equal(await fs.readFile(paths.userMd, 'utf8'), '我喜欢喝咖啡。');
+  const state = await kernel.state();
+  assert.equal(state.onboarded, true);
+  assert.equal(state.mainBotId, bot.id);
+  assert.equal(state.bots.length, 1);
+  await kernel.close();
+});
+
+test('updateBot：thinkingLevel 不在 allowedThinkingLevels 中 → invalid；换供应商或模型名后原档位不再允许时重置为 null', async () => {
+  const root = await tmpRoot();
+  const kernel = await Kernel.open({ dataRoot: root, crypto: fakeCrypto(), callModel: echoModel() });
+  const custom = await kernel.addProvider({
+    name: '自定义',
+    format: 'chat_completions',
+    baseUrl: 'http://127.0.0.1:1',
+    apiKey: 'sk-a-123456',
+    presetId: 'custom-chat',
+  });
+  const deepseek = await kernel.addProvider({
+    name: 'DeepSeek',
+    format: 'chat_completions',
+    baseUrl: 'https://api.deepseek.com',
+    apiKey: 'sk-b-123456',
+    presetId: 'deepseek',
+  });
+  const bot = await kernel.completeOnboarding({ providerId: custom.id, model: 'm' });
+  const set = await kernel.updateBot(bot.id, { thinkingLevel: 'xhigh' });
+  assert.equal(set.thinkingLevel, 'xhigh');
+
+  await assert.rejects(
+    kernel.updateBot(bot.id, { thinkingLevel: 'bogus' as never }),
+    (err: unknown) => err instanceof KernelError && err.code === 'invalid',
+  );
+
+  const switched = await kernel.updateBot(bot.id, {
+    providerId: deepseek.id,
+    model: 'deepseek-v4-pro',
+  });
+  assert.equal(switched.thinkingLevel, null);
+
+  await assert.rejects(
+    kernel.updateBot(bot.id, { thinkingLevel: 'none' }),
+    (err: unknown) => err instanceof KernelError && err.code === 'invalid',
+  );
+  const allowed = await kernel.updateBot(bot.id, { thinkingLevel: 'high' });
+  assert.equal(allowed.thinkingLevel, 'high');
+  await kernel.close();
+});
+
+test('onboarding 未给 contextWindow 时按 defaultContextWindow 填', async () => {
+  const root1 = await tmpRoot();
+  const k1 = await Kernel.open({ dataRoot: root1, crypto: fakeCrypto(), callModel: echoModel() });
+  const deepseek = await k1.addProvider({
+    name: 'DeepSeek',
+    format: 'chat_completions',
+    baseUrl: 'https://api.deepseek.com',
+    apiKey: 'sk-d-123456',
+    presetId: 'deepseek',
+  });
+  const bot1 = await k1.completeOnboarding({ providerId: deepseek.id, model: 'deepseek-v4-pro' });
+  assert.equal(bot1.contextWindow, 1_000_000);
+  await k1.close();
+
+  const root2 = await tmpRoot();
+  const k2 = await Kernel.open({ dataRoot: root2, crypto: fakeCrypto(), callModel: echoModel() });
+  const volc = await k2.addProvider({
+    name: '火山',
+    format: 'responses',
+    baseUrl: 'https://ark.cn-beijing.volces.com/api/coding/v3',
+    apiKey: 'sk-v-123456',
+    presetId: 'volc-coding',
+  });
+  const bot2 = await k2.completeOnboarding({
+    providerId: volc.id,
+    model: 'doubao-seed-2.0-mini',
+  });
+  assert.equal(bot2.contextWindow, 256_000);
+  await k2.close();
+});
+
+test('Key 不落进 config.json；state 里 hasKey 正确', async () => {
+  const root = await tmpRoot();
+  const kernel = await Kernel.open({ dataRoot: root, crypto: fakeCrypto(), callModel: echoModel() });
+  const key = 'sk-config-secret-123';
+  const provider = await kernel.addProvider({
+    name: 'P',
+    format: 'chat_completions',
+    baseUrl: 'http://127.0.0.1:1',
+    apiKey: key,
+  });
+  const paths = dataPaths(root);
+  const configText = await fs.readFile(paths.config, 'utf8');
+  assert.equal(configText.includes(key), false);
+  const state = await kernel.state();
+  assert.equal(state.providers[0]!.hasKey, true);
+  assert.equal('apiKey' in state.providers[0]!, false);
+  assert.equal(provider.id.length > 0, true);
+  await kernel.close();
+});
+
+test('Linux basic_text：addProvider 带 apiKey → KernelError key_not_persistable；用 apiKeyEnv 可以', async () => {
+  const root = await tmpRoot();
+  const envName = 'MINIBOT_TEST_KEY_ENV';
+  const previous = process.env[envName];
+  process.env[envName] = 'sk-env-secret-123';
+  try {
+    const kernel = await Kernel.open({
+      dataRoot: root,
+      crypto: fakeCrypto('basic_text'),
+      callModel: echoModel(),
+      platform: 'linux',
+    });
+    assert.equal((await kernel.state()).canPersistKeys, false);
+    await assert.rejects(
+      kernel.addProvider({
+        name: 'P',
+        format: 'chat_completions',
+        baseUrl: 'http://x',
+        apiKey: 'sk-12345678',
+      }),
+      (err: unknown) => err instanceof KernelError && err.code === 'key_not_persistable',
+    );
+    const provider = await kernel.addProvider({
+      name: 'P2',
+      format: 'chat_completions',
+      baseUrl: 'http://x',
+      apiKeyEnv: envName,
+    });
+    const state = await kernel.state();
+    assert.equal(state.providers[0]!.hasKey, true);
+    assert.equal(state.providers[0]!.id, provider.id);
+    const configText = await fs.readFile(dataPaths(root).config, 'utf8');
+    assert.equal(configText.includes('sk-env-secret-123'), false);
+    await kernel.close();
+  } finally {
+    if (previous === undefined) delete process.env[envName];
+    else process.env[envName] = previous;
+  }
+});
+
+test('界面写记忆：baseHash 过期 → conflict；成功时记 manual_ui / user 修订', async () => {
+  const root = await tmpRoot();
+  const kernel = await Kernel.open({ dataRoot: root, crypto: fakeCrypto(), callModel: echoModel() });
+  const provider = await kernel.addProvider({
+    name: 'P',
+    format: 'chat_completions',
+    baseUrl: 'http://x',
+    apiKey: 'sk-ui-secret-123',
+  });
+  const bot = await kernel.completeOnboarding({
+    providerId: provider.id,
+    model: 'm',
+    profile: '旧画像',
+  });
+  const memory = await kernel.listMemory(bot.id);
+  const opened = await kernel.readMemoryFile(memory.user.path);
+  await assert.rejects(
+    kernel.writeMemoryFile(memory.user.path, '新画像', 'not-the-hash'),
+    (err: unknown) => err instanceof KernelError && err.code === 'conflict',
+  );
+  const written = await kernel.writeMemoryFile(memory.user.path, '新画像', opened.hash);
+  assert.equal(written.hash.length > 0, true);
+  const revisions = kernel.listRevisions(memory.user.path);
+  assert.equal(revisions.length, 1);
+  assert.equal(revisions[0]!.source, 'manual_ui');
+  assert.equal(revisions[0]!.actor, 'user');
+  const reread = await kernel.readMemoryFile(memory.user.path);
+  assert.equal(reread.content, '新画像');
+  await kernel.close();
+});
+
+test('readMemoryFile 拒绝非记忆路径', async () => {
+  const root = await tmpRoot();
+  const kernel = await Kernel.open({ dataRoot: root, crypto: fakeCrypto(), callModel: echoModel() });
+  const paths = dataPaths(root);
+  await assert.rejects(
+    kernel.readMemoryFile(paths.config),
+    (err: unknown) => err instanceof KernelError && err.code === 'invalid',
+  );
+  await kernel.close();
+});
+
+test('sendMessage 端到端（假模型）：发出 delta、message 与 turn 事件', async () => {
+  const root = await tmpRoot();
+  const kernel = await Kernel.open({
+    dataRoot: root,
+    crypto: fakeCrypto(),
+    callModel: echoModel('你好呀'),
+  });
+  const provider = await kernel.addProvider({
+    name: 'P',
+    format: 'chat_completions',
+    baseUrl: 'http://x',
+    apiKey: 'sk-send-secret-123',
+  });
+  const bot = await kernel.completeOnboarding({ providerId: provider.id, model: 'm' });
+  const thread = kernel.createThread(bot.id);
+  const events: KernelEvent[] = [];
+  kernel.on((e) => events.push(e));
+  kernel.sendMessage(thread.id, '在吗');
+  await waitFor(() =>
+    events.some((e) => e.type === 'turn' && e.threadId === thread.id && e.state === 'idle'),
+  );
+  assert.equal(events.some((e) => e.type === 'delta'), true);
+  const assistant = kernel.listMessages(thread.id).find((m) => m.role === 'assistant');
+  const textBlock = assistant?.blocks.find(
+    (b): b is Extract<Block, { type: 'text' }> => b.type === 'text',
+  );
+  assert.equal(textBlock?.text, '你好呀');
+  assert.equal(events.some((e) => e.type === 'message' && e.message.role === 'assistant'), true);
+  await kernel.close();
+});
+
+test('close 中止正在运行的线程', async () => {
+  let modelSignal: AbortSignal | undefined;
+  let signalReady: (() => void) | undefined;
+  const ready = new Promise<void>((resolve) => {
+    signalReady = resolve;
+  });
+  const model: CallModel = async ({ signal }) => {
+    modelSignal = signal;
+    signalReady?.();
+    return new Promise((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(new AbortedError([{ type: 'text', text: '部分' }])), {
+        once: true,
+      });
+    });
+  };
+  const root = await tmpRoot();
+  const kernel = await Kernel.open({ dataRoot: root, crypto: fakeCrypto(), callModel: model });
+  const provider = await kernel.addProvider({
+    name: 'P',
+    format: 'chat_completions',
+    baseUrl: 'http://x',
+    apiKey: 'sk-close-secret-123',
+  });
+  const bot = await kernel.completeOnboarding({ providerId: provider.id, model: 'm' });
+  const thread = kernel.createThread(bot.id);
+  kernel.sendMessage(thread.id, '开始');
+  await ready;
+  await kernel.close();
+  assert.equal(modelSignal?.aborted, true);
+});
+
+test('deleteProvider：有 bot 在用时抛 provider_in_use', async () => {
+  const root = await tmpRoot();
+  const kernel = await Kernel.open({ dataRoot: root, crypto: fakeCrypto(), callModel: echoModel() });
+  const provider = await kernel.addProvider({
+    name: 'P',
+    format: 'chat_completions',
+    baseUrl: 'http://x',
+    apiKey: 'sk-del-secret-123',
+  });
+  const bot = await kernel.completeOnboarding({ providerId: provider.id, model: 'm' });
+  await assert.rejects(
+    kernel.deleteProvider(provider.id),
+    (err: unknown) => err instanceof KernelError && err.code === 'provider_in_use',
+  );
+  await kernel.close();
+});

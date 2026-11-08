@@ -1,0 +1,20 @@
+{
+  "name": "minibot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/core",
+    "apps/desktop"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace @minibot/core && npm run build --workspace @minibot/desktop && node scripts/copy-static.mjs",
+    "start": "npm run start --workspace @minibot/desktop",
+    "test": "node --test packages/core/test/"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "@types/ws": "8.18.2",
+    "typescript": "5.9.3"
+  }
+}
