@@ -112,12 +112,8 @@ export class OnboardingView implements View {
     const mascot = div('mascot');
     mascot.setAttribute('aria-label', t('onboarding.mascotAlt'));
     mascot.innerHTML =
-      '<svg viewBox="0 0 120 120" role="img" aria-hidden="true">' +
-      '<circle cx="60" cy="64" r="42" fill="#fbbf24"/>' +
-      '<circle cx="46" cy="58" r="7" fill="#1c1917"/>' +
-      '<circle cx="74" cy="58" r="7" fill="#1c1917"/>' +
-      '<path d="M40 80 Q60 94 80 80" stroke="#1c1917" stroke-width="5" fill="none" stroke-linecap="round"/>' +
-      '<rect x="22" y="14" width="76" height="14" rx="7" fill="#a78bfa"/>' +
+      '<svg viewBox="36 56 184 144" role="img" aria-hidden="true">' +
+      '<path fill-rule="evenodd" fill="#7c3aed" d="M88 56h80a52 52 0 0 1 52 52v40a52 52 0 0 1-52 52H88a52 52 0 0 1-52-52v-40a52 52 0 0 1 52-52ZM98 106a20 20 0 1 0 0 40a20 20 0 1 0 0 -40ZM142 128h46v18h-46Z"/>' +
       '</svg>';
 
     const card = div('onboarding-card');

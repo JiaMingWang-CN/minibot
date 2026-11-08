@@ -7,7 +7,7 @@ export const zhCN = {
   'common.next': '下一步',
   'common.skip': '跳过',
   'onboarding.title': '开始使用 minibot',
-  'onboarding.mascotAlt': '吉祥物占位图',
+  'onboarding.mascotAlt': 'minibot 标志',
   'onboarding.step.progress': '第 {current} / {total} 步',
   'onboarding.step.model': '模型接入',
   'onboarding.step.profile': '用户画像',

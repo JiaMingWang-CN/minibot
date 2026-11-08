@@ -11,6 +11,7 @@ import { OnboardingView, type View } from './views/onboarding.js';
 import { ChatView } from './views/chat.js';
 import { MemoryView } from './views/memory.js';
 import { SettingsView } from './views/settings.js';
+import { playSplash } from './views/splash.js';
 
 let current: View | undefined;
 let eventsConnection: EventConnection | undefined;
@@ -137,4 +138,5 @@ async function start(): Promise<void> {
   }
 }
 
+playSplash();
 void start();
