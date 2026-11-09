@@ -8,6 +8,38 @@ import type { View } from './onboarding.js';
 const PAGE_SIZE = 30;
 const OLDER_SIZE = 20;
 
+const BOT_PATH =
+  'M88 56h80a52 52 0 0 1 52 52v40a52 52 0 0 1-52 52H88a52 52 0 0 1-52-52v-40a52 52 0 0 1 52-52ZM98 106a20 20 0 1 0 0 40a20 20 0 1 0 0 -40ZM142 128h46v18h-46Z';
+const MARK_SVG = `<svg viewBox="36 56 184 144" aria-hidden="true"><path fill-rule="evenodd" fill="#7c3aed" d="${BOT_PATH}"/></svg>`;
+const LOGO_SVG =
+  '<svg viewBox="-24 0 968.444 256" role="img" aria-label="minibot">' +
+  `<path transform="translate(-40 -14.2222) scale(1.11111)" fill-rule="evenodd" fill="#7c3aed" d="${BOT_PATH}"/>` +
+  '<path transform="translate(264.444 208) scale(1)" fill="#1c1917" d="M0 0V-59.5A42 42 0 0 1 84 -59.5V0H62V-59.5A20 20 0 0 0 22 -59.5V0ZM62 0V-59.5A42 42 0 0 1 146 -59.5V0H124V-59.5A20 20 0 0 0 84 -59.5V0ZM170 -100H192V0H170ZM181 -143A13 13 0 1 1 181 -117A13 13 0 1 1 181 -143ZM216 0V-59.5A42 42 0 0 1 300 -59.5V0H278V-59.5A20 20 0 0 0 238 -59.5V0ZM324 -100H346V0H324ZM335 -143A13 13 0 1 1 335 -117A13 13 0 1 1 335 -143ZM370 -140H392V0H370ZM421.5 -101.5A51.5 51.5 0 1 1 421.5 1.5A51.5 51.5 0 1 1 421.5 -101.5ZM421.5 -79.5A29.5 29.5 0 1 0 421.5 -20.5A29.5 29.5 0 1 0 421.5 -79.5ZM538.5 -101.5A51.5 51.5 0 1 1 538.5 1.5A51.5 51.5 0 1 1 538.5 -101.5ZM538.5 -79.5A29.5 29.5 0 1 0 538.5 -20.5A29.5 29.5 0 1 0 538.5 -79.5ZM614 -128H636V0H614ZM600 -100H656V-78H600Z"/>' +
+  '</svg>';
+
+function icon(paths: string, className = ''): string {
+  return `<svg class="${className}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+}
+
+const ICON_PLUS = icon('<path d="M12 5v14M5 12h14"/>');
+const ICON_MEMORY = icon('<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h3"/>');
+const ICON_SETTINGS = icon(
+  '<path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/>',
+);
+const ICON_SEND = icon('<path d="M12 19V5M6 11l6-6 6 6"/>', 'icon-send');
+const ICON_STOP =
+  '<svg class="icon-stop" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor"/></svg>';
+
+function iconButton(svg: string, label: string): HTMLButtonElement {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'icon-button';
+  button.innerHTML = svg;
+  button.title = label;
+  button.setAttribute('aria-label', label);
+  return button;
+}
+
 function div(className: string): HTMLDivElement {
   const node = document.createElement('div');
   node.className = className;
@@ -35,7 +67,7 @@ export class ChatView implements View {
   private input: HTMLTextAreaElement | undefined;
   private status: HTMLElement | undefined;
   private approvalArea: HTMLElement | undefined;
-  private stopButton: HTMLButtonElement | undefined;
+  private chatTitle: HTMLElement | undefined;
   private compactButton: HTMLButtonElement | undefined;
   private sendButton: HTMLButtonElement | undefined;
 
@@ -68,67 +100,57 @@ export class ChatView implements View {
     this.layout = div('chat-layout');
 
     const sidebar = div('thread-sidebar');
-    const sidebarHead = div('thread-sidebar-head');
-    const botName = document.createElement('span');
-    botName.className = 'bot-name';
-    botName.textContent = this.bot.name;
+    const brand = div('side-brand');
+    brand.innerHTML = LOGO_SVG;
     const newThread = document.createElement('button');
     newThread.type = 'button';
-    newThread.className = 'secondary small';
-    newThread.textContent = t('chat.newThread');
+    newThread.className = 'new-thread';
+    newThread.innerHTML = ICON_PLUS;
+    newThread.append(t('chat.newThread'));
     newThread.addEventListener('click', () => {
       void this.createThread();
     });
-    sidebarHead.append(botName, newThread);
-    const nav = div('thread-nav');
-    if (this.options.onOpenMemory !== undefined) {
-      const memory = document.createElement('button');
-      memory.type = 'button';
-      memory.className = 'secondary small';
-      memory.textContent = t('chat.memory');
-      memory.addEventListener('click', () => this.options.onOpenMemory?.());
-      nav.append(memory);
-    }
-    if (this.options.onOpenSettings !== undefined) {
-      const settings = document.createElement('button');
-      settings.type = 'button';
-      settings.className = 'secondary small';
-      settings.textContent = t('chat.settings');
-      settings.addEventListener('click', () => this.options.onOpenSettings?.());
-      nav.append(settings);
-    }
     const threadList = div('thread-list');
     this.threadList = threadList;
-    sidebar.append(sidebarHead, nav, threadList);
+
+    const foot = div('side-foot');
+    const avatar = div('bot-avatar');
+    avatar.innerHTML = MARK_SVG;
+    const botName = document.createElement('span');
+    botName.className = 'bot-name';
+    botName.textContent = this.bot.name;
+    foot.append(avatar, botName);
+    if (this.options.onOpenMemory !== undefined) {
+      const memory = iconButton(ICON_MEMORY, t('chat.memory'));
+      memory.addEventListener('click', () => this.options.onOpenMemory?.());
+      foot.append(memory);
+    }
+    if (this.options.onOpenSettings !== undefined) {
+      const settings = iconButton(ICON_SETTINGS, t('chat.settings'));
+      settings.addEventListener('click', () => this.options.onOpenSettings?.());
+      foot.append(settings);
+    }
+    sidebar.append(brand, newThread, threadList, foot);
 
     const main = div('chat-main');
     const header = div('chat-header');
     const title = document.createElement('span');
     title.className = 'chat-title';
     title.textContent = t('chat.title');
+    this.chatTitle = title;
     const actions = div('chat-actions');
-    const stop = document.createElement('button');
-    stop.type = 'button';
-    stop.className = 'secondary small';
-    stop.textContent = t('chat.stop');
-    stop.addEventListener('click', () => {
-      if (this.activeThreadId !== null) {
-        this.send({ type: 'abort', threadId: this.activeThreadId });
-      }
-    });
     const compact = document.createElement('button');
     compact.type = 'button';
-    compact.className = 'secondary small';
     compact.textContent = t('chat.compact');
     compact.addEventListener('click', () => {
       void this.compact();
     });
-    actions.append(stop, compact);
+    actions.append(compact);
     header.append(title, actions);
-    this.stopButton = stop;
     this.compactButton = compact;
 
     const status = div('chat-status');
+    status.setAttribute('role', 'status');
     this.status = status;
 
     const approvalArea = div('approval-area');
@@ -143,27 +165,39 @@ export class ChatView implements View {
     });
 
     const composer = div('composer');
+    const box = div('composer-box');
     const input = document.createElement('textarea');
-    input.rows = 3;
-    input.placeholder = t('chat.inputPlaceholder');
+    input.rows = 1;
+    input.placeholder = t('chat.inputPlaceholder', { name: this.bot.name });
     input.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter' && !event.shiftKey) {
+      if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
         event.preventDefault();
         void this.submit();
       }
     });
+    input.addEventListener('input', () => this.fitInput());
+    const bar = div('composer-bar');
+    const hint = document.createElement('span');
+    hint.className = 'composer-hint';
+    hint.textContent = t('chat.inputHint');
     const sendButton = document.createElement('button');
     sendButton.type = 'button';
-    sendButton.className = 'primary';
-    sendButton.textContent = t('chat.send');
+    sendButton.className = 'send-button';
+    sendButton.innerHTML = ICON_SEND + ICON_STOP;
     sendButton.addEventListener('click', () => {
+      if (this.isActiveRunning()) {
+        if (this.activeThreadId !== null) this.send({ type: 'abort', threadId: this.activeThreadId });
+        return;
+      }
       void this.submit();
     });
-    composer.append(input, sendButton);
+    bar.append(hint, sendButton);
+    box.append(input, bar);
+    composer.append(box);
     this.input = input;
     this.sendButton = sendButton;
 
-    main.append(header, status, approvalArea, messageList, composer);
+    main.append(header, status, messageList, approvalArea, composer);
     this.layout.append(sidebar, main);
     el.replaceChildren(this.layout);
     this.updateButtons();
@@ -251,7 +285,8 @@ export class ChatView implements View {
       title.textContent = thread.title;
       const running = document.createElement('span');
       running.className = 'thread-running-dot';
-      running.textContent = t('thread.running');
+      running.title = t('thread.running');
+      running.setAttribute('aria-label', t('thread.running'));
       if (this.running.has(thread.id)) running.classList.add('is-visible');
       item.append(title, running);
       item.addEventListener('click', () => {
@@ -259,14 +294,34 @@ export class ChatView implements View {
       });
       this.threadList.append(item);
     }
+    if (this.chatTitle !== undefined) {
+      const active = this.threads.find((thread) => thread.id === this.activeThreadId);
+      this.chatTitle.textContent = active?.title || t('chat.title');
+    }
     this.updateButtons();
+  }
+
+  private isActiveRunning(): boolean {
+    return this.activeThreadId !== null && this.running.has(this.activeThreadId);
   }
 
   private updateButtons(): void {
     const disabled = this.activeThreadId === null;
-    if (this.stopButton !== undefined) this.stopButton.disabled = disabled;
     if (this.compactButton !== undefined) this.compactButton.disabled = disabled;
-    if (this.sendButton !== undefined) this.sendButton.disabled = disabled;
+    if (this.sendButton !== undefined) {
+      const stop = this.isActiveRunning();
+      this.sendButton.disabled = disabled;
+      this.sendButton.classList.toggle('is-stop', stop);
+      const label = stop ? t('chat.stop') : t('chat.send');
+      this.sendButton.title = label;
+      this.sendButton.setAttribute('aria-label', label);
+    }
+  }
+
+  private fitInput(): void {
+    if (this.input === undefined) return;
+    this.input.style.height = 'auto';
+    this.input.style.height = `${this.input.scrollHeight}px`;
   }
 
   private async loadMessages(threadId: string): Promise<void> {
@@ -283,7 +338,12 @@ export class ChatView implements View {
       if (token !== this.loadToken) return;
       if (messages.length === 0) {
         const empty = div('chat-empty');
-        empty.textContent = t('chat.emptyMessages');
+        empty.innerHTML = MARK_SVG;
+        const title = div('chat-empty-title');
+        title.textContent = t('chat.emptyMessages', { name: this.bot.name });
+        const hint = div('chat-empty-hint');
+        hint.textContent = t('chat.emptyHint');
+        empty.append(title, hint);
         this.messageList.append(empty);
       }
       this.hasMore = messages.length === PAGE_SIZE;
@@ -346,10 +406,13 @@ export class ChatView implements View {
       speaker.textContent = this.bot.name;
       meta.append(speaker);
       const content = div('message-content');
+      const text = div('block-text');
+      content.append(text);
       article.append(meta, content);
+      this.messageList.querySelector('.chat-empty')?.remove();
       this.messageList.append(article);
       this.streamElement = article;
-      this.streamContent = content;
+      this.streamContent = text;
     }
     if (this.streamContent !== undefined) this.streamContent.textContent += text;
     this.scrollToBottom();
@@ -379,6 +442,7 @@ export class ChatView implements View {
     try {
       await this.api.sendMessage(threadId, text);
       if (this.input !== undefined) this.input.value = '';
+      this.fitInput();
       if (this.status !== undefined) this.status.textContent = '';
       this.scrollToBottom();
     } catch (err) {
