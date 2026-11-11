@@ -6,6 +6,9 @@ export interface DataPaths {
   config: string;
   secrets: string;
   userMd: string;
+  remoteJson: string;
+  remoteKey: string;
+  devicesJson: string;
   db: string;
   outputs: string;
   attachments: string;
@@ -26,6 +29,9 @@ export function dataPaths(root: string): DataPaths {
     config: path.join(root, 'config.json'),
     secrets: path.join(root, 'secrets.bin'),
     userMd: path.join(root, 'user.md'),
+    remoteJson: path.join(root, 'remote.json'),
+    remoteKey: path.join(root, 'remote-key.bin'),
+    devicesJson: path.join(root, 'devices.json'),
     db: path.join(root, 'minibot.db'),
     outputs: path.join(root, 'outputs'),
     attachments: path.join(root, 'attachments'),
