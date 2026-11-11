@@ -40,8 +40,9 @@ async function assertProcessDead(pid: number): Promise<void> {
     try {
       const stat = await fs.readFile(`/proc/${pid}/stat`, 'utf8');
       if (stat.slice(stat.lastIndexOf(')') + 2, stat.lastIndexOf(')') + 3) === 'Z') alive = false;
-    } catch {
-      alive = false;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') alive = false;
+      else throw err;
     }
   }
   assert.equal(alive, false, `进程 ${pid} 仍然存活`);
