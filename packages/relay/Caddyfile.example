@@ -1,0 +1,5 @@
+# 把 relay.example.com 换成你自己的域名；Caddy 会自动申请并续期证书。
+# 中继本身保持默认只监听 127.0.0.1:8787，由 Caddy 对外提供 wss://relay.example.com/v1
+relay.example.com {
+	reverse_proxy 127.0.0.1:8787
+}

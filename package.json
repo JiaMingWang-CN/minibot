@@ -5,15 +5,16 @@
   "type": "module",
   "workspaces": [
     "packages/core",
+    "packages/relay",
     "apps/desktop",
     "apps/renderer"
   ],
   "scripts": {
-    "build": "npm run build --workspace @minibot/core && npm run build --workspace @minibot/desktop && npm run build --workspace @minibot/renderer",
+    "build": "npm run build --workspace @minibot/core && npm run build --workspace @minibot/relay && npm run build --workspace @minibot/desktop && npm run build --workspace @minibot/renderer",
     "start": "npm run start --workspace @minibot/desktop",
     "pack": "npm run build && npm run pack --workspace @minibot/desktop",
     "lint": "eslint .",
-    "test": "node --test \"packages/core/test/*.test.ts\""
+    "test": "node --test \"packages/core/test/*.test.ts\" \"packages/relay/test/*.test.ts\""
   },
   "devDependencies": {
     "@types/node": "24.19.2",
