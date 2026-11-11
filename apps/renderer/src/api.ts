@@ -12,6 +12,8 @@ import type {
   OnboardingInput,
   Preset,
   Provider,
+  RemoteConfig,
+  RemoteStatus,
   SearchHit,
   StoredMessage,
   TestConnectionResult,
@@ -143,6 +145,12 @@ export function createApi(conn: Conn) {
       if (botId !== undefined) search.set('botId', botId);
       return call<SearchHit[]>('GET', `/api/search?${search.toString()}`);
     },
+    remoteStatus: () => call<RemoteStatus>('GET', '/api/remote'),
+    updateRemote: (patch: Partial<RemoteConfig> & { relayToken?: string | null }) =>
+      call<RemoteStatus>('PUT', '/api/remote', patch),
+    startPairing: () => call<RemoteStatus>('POST', '/api/remote/pairing'),
+    cancelPairing: () => call<RemoteStatus>('DELETE', '/api/remote/pairing'),
+    revokeDevice: (id: string) => call<RemoteStatus>('DELETE', `/api/remote/devices/${enc(id)}`),
     pendingApprovals: () => call<ApprovalRequest[]>('GET', '/api/approvals'),
     runningThreads: () => call<string[]>('GET', '/api/running'),
     /** 附件需要令牌才能读，取回后转成 blob: 地址给 <img> 用（CSP 允许 blob: 图片） */

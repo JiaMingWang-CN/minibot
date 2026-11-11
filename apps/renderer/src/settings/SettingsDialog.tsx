@@ -3,16 +3,18 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import type { Bot, KernelState } from '@minibot/core';
-import { Brain, KeyRound, ScrollText, Search, User, X, type LucideIcon } from 'lucide-react';
+import { Brain, KeyRound, ScrollText, Search, Smartphone, User, X, type LucideIcon } from 'lucide-react';
 import type { Api, PresetWithModels } from '../api';
+import type { Subscribe } from '../App';
 import { cn } from '../lib/cn';
 import { t, type MessageKey } from '../i18n';
 import { ActivityPage } from './ActivityPage';
 import { ConsolidationPage } from './ConsolidationPage';
 import { GeneralPage } from './GeneralPage';
+import { PhonePage } from './PhonePage';
 import { ProvidersPage } from './ProvidersPage';
 
-export type SettingsPageId = 'general' | 'providers' | 'consolidation' | 'activity';
+export type SettingsPageId = 'general' | 'providers' | 'consolidation' | 'activity' | 'phone';
 
 /** keywords 是语言包里用空格分隔的搜索词 */
 const PAGES: { id: SettingsPageId; label: MessageKey; icon: LucideIcon; keywords: MessageKey }[] = [
@@ -20,6 +22,7 @@ const PAGES: { id: SettingsPageId; label: MessageKey; icon: LucideIcon; keywords
   { id: 'providers', label: 'settings.page.providers', icon: KeyRound, keywords: 'settings.keywords.providers' },
   { id: 'consolidation', label: 'settings.page.consolidation', icon: Brain, keywords: 'settings.keywords.consolidation' },
   { id: 'activity', label: 'settings.page.activity', icon: ScrollText, keywords: 'settings.keywords.activity' },
+  { id: 'phone', label: 'settings.page.phone', icon: Smartphone, keywords: 'settings.keywords.phone' },
 ];
 
 export function SettingsDialog({
@@ -30,10 +33,12 @@ export function SettingsDialog({
   canPersistKeys,
   initialPage = 'general',
   memoryVersion,
+  subscribe,
   onRefresh,
   onClose,
 }: {
   memoryVersion: number;
+  subscribe: Subscribe;
   api: Api;
   bot: Bot;
   providers: KernelState['providers'];
@@ -76,6 +81,7 @@ export function SettingsDialog({
   else if (page === 'providers')
     body = <ProvidersPage api={api} bot={bot} providers={providers} presets={presets} canPersistKeys={canPersistKeys} onRefresh={onRefresh} />;
   else if (page === 'consolidation') body = <ConsolidationPage api={api} providers={providers} presets={presets} />;
+  else if (page === 'phone') body = <PhonePage api={api} subscribe={subscribe} />;
   else body = <ActivityPage api={api} />;
 
   return createPortal(

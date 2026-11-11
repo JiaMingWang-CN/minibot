@@ -1,9 +1,9 @@
-const { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell } = require('electron') as typeof import('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, shell, Tray } = require('electron') as typeof import('electron');
 const path = require('node:path') as typeof import('node:path');
 const { URL } = require('node:url') as typeof import('node:url');
 
 const core = require('@minibot/core') as typeof import('@minibot/core');
-const { Kernel, defaultDataRoot, startServer } = core;
+const { Kernel, RemoteService, defaultDataRoot, startServer } = core;
 const cryptoModule = require('./crypto.cjs') as {
   electronCrypto: () => import('@minibot/core').KeyCrypto;
 };
@@ -22,14 +22,20 @@ const preloadPath = path.join(__dirname, 'preload.cjs');
 const staticDir = path.join(__dirname, 'static');
 
 let kernel: Awaited<ReturnType<typeof Kernel.open>> | undefined;
+let remote: Awaited<ReturnType<typeof RemoteService.start>> | undefined;
+let tray: InstanceType<typeof Tray> | undefined;
+let backgroundNoticeShown = false;
 let server: ServerHandle | undefined;
 let mainWindow: InstanceType<typeof BrowserWindow> | undefined;
 let quitting = false;
 
 async function bootstrap(): Promise<void> {
   const dataRoot = process.env['MINIBOT_HOME'] ?? defaultDataRoot();
-  kernel = await Kernel.open({ dataRoot, crypto: cryptoModule.electronCrypto() });
-  server = await startServer(kernel, { staticDir });
+  const crypto = cryptoModule.electronCrypto();
+  kernel = await Kernel.open({ dataRoot, crypto });
+  // 手机功能的任何问题（没有密钥库、端口被占用…）只体现在“手机”设置页，不影响内核与本机界面
+  remote = await RemoteService.start(kernel, { dataRoot, crypto });
+  server = await startServer(kernel, { staticDir, remote });
 
   // 只接受本应用主窗口、且页面来自本机服务的调用
   const assertTrusted = (event: import('electron').IpcMainInvokeEvent): void => {
@@ -112,10 +118,45 @@ async function bootstrap(): Promise<void> {
     event.preventDefault();
     openExternal(navigationUrl);
   });
+  // 有已配对的手机时，关窗口只是隐藏到托盘，让手机继续连得上；没有设备时照旧直接退出
+  mainWindow.on('close', (event) => {
+    if (quitting || remote === undefined || !remote.hasDevices()) return;
+    event.preventDefault();
+    mainWindow?.hide();
+    if (!backgroundNoticeShown && Notification.isSupported()) {
+      backgroundNoticeShown = true;
+      new Notification({
+        title: 'minibot',
+        body: 'minibot 仍在后台运行，手机可以继续连接。可从托盘图标退出。',
+      }).show();
+    }
+  });
   mainWindow.on('closed', () => {
     mainWindow = undefined;
   });
+  createTray();
   await mainWindow.loadURL(`${server.origin}/`);
+}
+
+function showMainWindow(): void {
+  if (mainWindow === undefined) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function createTray(): void {
+  if (tray !== undefined) return;
+  const icon = nativeImage.createFromPath(path.join(staticDir, 'assets', 'icon.png')).resize({ width: 16, height: 16 });
+  tray = new Tray(icon);
+  tray.setToolTip('minibot');
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: '打开 minibot', click: showMainWindow },
+      { label: '退出', click: () => app.quit() },
+    ]),
+  );
+  tray.on('click', showMainWindow);
 }
 
 // 同一数据目录只能有一个内核：第二个实例的启动修复会把第一个实例进行中的调用记成已取消。
@@ -124,11 +165,7 @@ const gotLock = process.env['MINIBOT_HOME'] !== undefined || app.requestSingleIn
 if (!gotLock) {
   app.quit();
 } else {
-  app.on('second-instance', () => {
-    if (mainWindow === undefined) return;
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.focus();
-  });
+  app.on('second-instance', showMainWindow);
   app
     .whenReady()
     .then(bootstrap)
@@ -141,6 +178,7 @@ if (!gotLock) {
 }
 
 app.on('window-all-closed', () => {
+  if (!quitting && remote?.hasDevices() === true) return;
   app.quit();
 });
 
@@ -149,6 +187,13 @@ app.on('before-quit', (event) => {
   quitting = true;
   event.preventDefault();
   void (async () => {
+    tray?.destroy();
+    tray = undefined;
+    try {
+      await remote?.close();
+    } catch {
+      // 关闭失败不阻止退出
+    }
     try {
       await server?.close();
     } catch {

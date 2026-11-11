@@ -376,6 +376,7 @@ const currentProvider = providers.find((p) => p.id === bot.providerId);  const v
           canPersistKeys={canPersistKeys}
           initialPage={settingsPage}
           memoryVersion={memoryVersion}
+          subscribe={subscribe}
           onRefresh={onRefresh}
           onClose={closeSettings}
         />
