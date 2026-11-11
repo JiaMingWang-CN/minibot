@@ -35,6 +35,15 @@ async function assertProcessDead(pid: number): Promise<void> {
     if ((err as NodeJS.ErrnoException).code === 'ESRCH') alive = false;
     else throw err;
   }
+  // 容器里的精简 init 可能不及时回收孤儿进程：僵尸进程已经结束，不算存活
+  if (alive && process.platform === 'linux') {
+    try {
+      const stat = await fs.readFile(`/proc/${pid}/stat`, 'utf8');
+      if (stat.slice(stat.lastIndexOf(')') + 2, stat.lastIndexOf(')') + 3) === 'Z') alive = false;
+    } catch {
+      alive = false;
+    }
+  }
   assert.equal(alive, false, `进程 ${pid} 仍然存活`);
 }
 
