@@ -125,7 +125,7 @@
 ### Task 3：中继程序 `packages/relay`
 
 **Files:**
-- Create: `packages/relay/package.json`（`@minibot/relay`，依赖 `ws@8.22.1`）、`packages/relay/tsconfig.json`、`packages/relay/src/relay.ts`、`packages/relay/src/main.ts`、`packages/relay/Dockerfile`、`packages/relay/Caddyfile.example`、`packages/relay/README.md`
+- Create: `packages/relay/package.json`（`@minibot/relay`，依赖 `ws@8.22.1`）、`packages/relay/tsconfig.json`、`packages/relay/src/relay.ts`、`packages/relay/src/main.ts`、`packages/relay/Caddyfile.example`、`packages/relay/README.md`
 - Modify: 根 `package.json`（workspaces、`build`、`test` 加上 relay）
 - Test: `packages/relay/test/relay.test.ts`
 
@@ -149,7 +149,7 @@
 - 每个 IP 每 60 秒最多 30 次新连接。
 - 每 25 秒 ping，60 秒无 pong 断开。
 - 不落盘、不打印任何负载内容；只打印连接数变化与错误。
-- Dockerfile 设 `RELAY_HOST=0.0.0.0`；README 用中文写：Docker 方式、`node` 直跑方式、Caddy 反代出 `wss://` 的示例，说明 `ws://` 只会暴露元数据。
+- 不提供 Docker。README 用中文写：服务器上装 Node 24 后 `npm run build` 再 `node` 直跑、用 systemd 常驻的示例单元文件、Caddy 反代出 `wss://` 的示例（中继保持默认只监听 `127.0.0.1`），说明 `ws://` 只会暴露元数据。
 
 **验收:**
 - `relay 转发`：电脑与手机同 routeId → 手机发 `[1,2,3]` 电脑收到 `sessionId + [1,2,3]`；电脑回 `sessionId + [4]` → 手机收到 `[4]`。
@@ -161,7 +161,7 @@
 - `relay 启动校验`：`RELAY_TOKEN` 为 `short` → 进程退出码非零。
 
 - [ ] **Step 1:** 写 **验收** 测试；运行 `npm test` — FAIL。
-- [ ] **Step 2:** 按 **思路** 与 **约束** 实现，写 README / Dockerfile / Caddy 示例。
+- [ ] **Step 2:** 按 **思路** 与 **约束** 实现，写 README / systemd 与 Caddy 示例。
 - [ ] **Step 3:** 运行 `npm test && npm run build && npm run lint` — PASS。
 - [ ] **Step 4:** 提交。
 
