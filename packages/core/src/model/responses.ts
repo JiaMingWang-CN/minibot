@@ -9,7 +9,6 @@ import {
 } from './adapter.ts';
 import type { ResultAccumulator } from './accumulator.ts';
 import { ModelError } from './types.ts';
-import type { Block } from './types.ts';
 import type { SseEvent } from './sse.ts';
 
 interface ResponsesItem {

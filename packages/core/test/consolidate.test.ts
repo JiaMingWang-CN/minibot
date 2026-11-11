@@ -6,7 +6,7 @@ import path from 'node:path';
 import { dataPaths } from '../src/paths.ts';
 import { openDb } from '../src/db/db.ts';
 import { createThread, getThread, updateThread } from '../src/db/threads.ts';
-import { appendMessage, messagesFrom } from '../src/db/messages.ts';
+import { appendMessage } from '../src/db/messages.ts';
 import { newBot, saveBot, loadBot } from '../src/config/config.ts';
 import { MemoryRevisions } from '../src/memory/revisions.ts';
 import { SecretSet } from '../src/secrets/redact.ts';

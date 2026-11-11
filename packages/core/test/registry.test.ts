@@ -79,7 +79,7 @@ test('未知工具或参数类型不对 → status error', async () => {
 });
 
 test('ask 模式下写文件先发审批；拒绝 → status denied，content "用户拒绝了此操作"', async () => {
-  const { root, paths, env, broker, close } = await setup();
+  const { paths, env, broker, close } = await setup();
   env.bot.approvalMode = 'ask';
   const target = path.join(paths.defaultWorkspace('b1'), 'w.txt');
   const promise = executeTool(call('write_file', { path: 'w.txt', content: 'x' }), env);

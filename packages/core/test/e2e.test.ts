@@ -37,10 +37,7 @@ interface FakeVendor {
 async function startFakeVendor(): Promise<FakeVendor> {
   let count = 0;
   const server = http.createServer((req, res) => {
-    let body = '';
-    req.on('data', (chunk) => {
-      body += String(chunk);
-    });
+    req.resume();
     req.on('end', () => {
       count += 1;
       res.writeHead(200, {

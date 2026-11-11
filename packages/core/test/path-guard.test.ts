@@ -83,7 +83,7 @@ test('默认工作目录在 dataRoot 之内，仍分类为 workspace', async () 
 });
 
 test('~ 展开', async () => {
-  const { root, ws, ctx } = await setup();
+  const { ws, ctx } = await setup();
   const real = await resolveReal('~/notes/a.txt', ws, ctx.home);
   assert.equal(real.startsWith(path.join(ctx.home, 'notes')), true);
 });

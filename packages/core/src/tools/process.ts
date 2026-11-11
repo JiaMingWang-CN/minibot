@@ -117,6 +117,8 @@ export function runProcess(p: RunProcessOptions): Promise<RunProcessResult> {
     let exitCode: number | null = null;
     let timedOut = false;
     let aborted = false;
+    // finish 在计时器创建之前就要能引用它，所以先声明后赋值
+    // eslint-disable-next-line prefer-const
     let timeoutTimer: NodeJS.Timeout | undefined;
 
     const onAbort = (): void => {

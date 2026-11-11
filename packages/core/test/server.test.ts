@@ -90,7 +90,7 @@ function request(
   return new Promise((resolve, reject) => {
     const headers: Record<string, string> = { ...(options.headers ?? {}) };
     if (options.auth !== false) headers['authorization'] = `Bearer ${server.token}`;
-    let payload = options.body;
+    const payload = options.body;
     if (payload !== undefined) headers['content-length'] = String(Buffer.byteLength(payload));
     const req = http.request(
       {

@@ -16,5 +16,6 @@ jobs:
           cache: npm
       - run: npm ci
       # 构建包含核心、桌面端的 tsc 类型检查和渲染端的 tsc + vite build
+      - run: npm run lint
       - run: npm run build
       - run: npm test

@@ -385,7 +385,7 @@ test('deleteProvider：有 bot 在用时抛 provider_in_use', async () => {
     baseUrl: 'http://x',
     apiKey: 'sk-del-secret-123',
   });
-  const bot = await kernel.completeOnboarding({ providerId: provider.id, model: 'm' });
+  await kernel.completeOnboarding({ providerId: provider.id, model: 'm' });
   await assert.rejects(
     kernel.deleteProvider(provider.id),
     (err: unknown) => err instanceof KernelError && err.code === 'provider_in_use',

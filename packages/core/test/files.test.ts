@@ -18,7 +18,6 @@ import {
   ERR_SECRET_IN_MEMORY,
   ERR_TOPIC_PATH,
 } from '../src/tools/files.ts';
-import { sha256 } from '../src/fs/lock.ts';
 import type { FileCtx } from '../src/tools/types.ts';
 
 interface CtxSetup {
