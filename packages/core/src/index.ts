@@ -41,3 +41,4 @@ export type {
 } from './config/types.ts';
 export type { ApprovalRequest } from './approval/broker.ts';
 export type { Revision, RevisionSource } from './memory/revisions.ts';
+export { RemoteService, type RemoteStatus, type RemoteConfig, type Device } from './remote/service.ts';

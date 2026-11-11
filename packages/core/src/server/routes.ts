@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { URL } from 'node:url';
 import { Kernel, KernelError } from '../kernel.ts';
 import { HttpError, dispatchApi, type ApiResponse } from './dispatch.ts';
+import type { RemoteService } from '../remote/service.ts';
 
 export function sendJson(res: ServerResponse, status: number, data: unknown): void {
   if (res.headersSent) return;
@@ -50,11 +51,16 @@ export async function handleApi(
   req: IncomingMessage,
   res: ServerResponse,
   url: URL,
+  remote?: RemoteService,
 ): Promise<void> {
-  const response = await dispatchApi(kernel, {
-    method: req.method ?? 'GET',
-    url,
-    readBody: (maxBytes) => readJsonBody(req, maxBytes),
-  });
+  const response = await dispatchApi(
+    kernel,
+    {
+      method: req.method ?? 'GET',
+      url,
+      readBody: (maxBytes) => readJsonBody(req, maxBytes),
+    },
+    remote !== undefined ? { remote } : {},
+  );
   writeResponse(res, response);
 }

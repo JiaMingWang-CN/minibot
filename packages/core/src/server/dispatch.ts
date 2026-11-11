@@ -1,6 +1,7 @@
 import { Kernel, KernelError } from '../kernel.ts';
 import type { AddProviderInput, ImageInput, OnboardingInput } from '../kernel.ts';
 import { knownModels } from '../config/presets.ts';
+import type { RemoteService } from '../remote/service.ts';
 
 export const MAX_BODY_BYTES = 1024 * 1024;
 /** 发消息接口可能带最多 4 张 5MB 的图片（base64 后约 6.7MB 每张） */
@@ -65,9 +66,14 @@ function optionalNumber(raw: string | null): number | undefined {
   return value;
 }
 
-export async function dispatchApi(kernel: Kernel, req: ApiRequest): Promise<ApiResponse> {
+export interface DispatchContext {
+  /** 本机管理路由（/api/remote）只在本机 HTTP 入口传入；远程网关不传 */
+  remote?: RemoteService;
+}
+
+export async function dispatchApi(kernel: Kernel, req: ApiRequest, ctx: DispatchContext = {}): Promise<ApiResponse> {
   try {
-    return await route(kernel, req);
+    return await route(kernel, req, ctx);
   } catch (err) {
     if (err instanceof HttpError) {
       return json(err.status, { error: { code: err.code, message: err.message } });
@@ -79,10 +85,14 @@ export async function dispatchApi(kernel: Kernel, req: ApiRequest): Promise<ApiR
   }
 }
 
-async function route(kernel: Kernel, req: ApiRequest): Promise<ApiResponse> {
+async function route(kernel: Kernel, req: ApiRequest, ctx: DispatchContext): Promise<ApiResponse> {
   const method = req.method;
   const url = req.url;
   const pathname = url.pathname;
+
+  if (pathname === '/api/remote' || pathname.startsWith('/api/remote/')) {
+    return await remoteRoute(ctx.remote, req);
+  }
 
   if (method === 'GET' && pathname === '/api/state') {
     return json(200, await kernel.state());
@@ -278,4 +288,55 @@ async function route(kernel: Kernel, req: ApiRequest): Promise<ApiResponse> {
   }
 
   return json(404, { error: { code: 'not_found', message: '接口不存在' } });
+}
+
+const notFound = (): ApiResponse => json(404, { error: { code: 'not_found', message: '接口不存在' } });
+
+async function remoteRoute(remote: RemoteService | undefined, req: ApiRequest): Promise<ApiResponse> {
+  if (remote === undefined) return notFound();
+  const { method } = req;
+  const pathname = req.url.pathname;
+  if (pathname === '/api/remote') {
+    if (method === 'GET') return json(200, remote.status());
+    if (method === 'PUT') {
+      const body = objectBody(await req.readBody(MAX_BODY_BYTES));
+      return json(200, await remote.updateConfig(remotePatch(body)));
+    }
+    return notFound();
+  }
+  if (pathname === '/api/remote/pairing') {
+    if (method === 'POST') return json(200, remote.startPairing());
+    if (method === 'DELETE') return json(200, remote.cancelPairing());
+    return notFound();
+  }
+  const match = /^\/api\/remote\/devices\/([^/]+)$/.exec(pathname);
+  if (match !== null && method === 'DELETE') {
+    return json(200, await remote.revoke(decodeURIComponent(match[1]!)));
+  }
+  return notFound();
+}
+
+function remotePatch(body: Record<string, unknown>): Parameters<RemoteService['updateConfig']>[0] {
+  const patch: Parameters<RemoteService['updateConfig']>[0] = {};
+  const take = <T>(key: string, check: (v: unknown) => v is T, label: string): T | undefined => {
+    if (!(key in body)) return undefined;
+    const value = body[key];
+    if (!check(value)) throw new KernelError('invalid', `${key} 必须是${label}`);
+    return value;
+  };
+  const isString = (v: unknown): v is string => typeof v === 'string';
+  const isStringOrNull = (v: unknown): v is string | null => v === null || typeof v === 'string';
+  const isBool = (v: unknown): v is boolean => typeof v === 'boolean';
+  const isNumber = (v: unknown): v is number => typeof v === 'number';
+  const relayUrl = take('relayUrl', isStringOrNull, '字符串或 null');
+  if (relayUrl !== undefined) patch.relayUrl = relayUrl;
+  const lanEnabled = take('lanEnabled', isBool, '布尔值');
+  if (lanEnabled !== undefined) patch.lanEnabled = lanEnabled;
+  const lanPort = take('lanPort', isNumber, '数字');
+  if (lanPort !== undefined) patch.lanPort = lanPort;
+  const pcName = take('pcName', isString, '字符串');
+  if (pcName !== undefined) patch.pcName = pcName;
+  const relayToken = take('relayToken', isStringOrNull, '字符串或 null');
+  if (relayToken !== undefined) patch.relayToken = relayToken;
+  return patch;
 }

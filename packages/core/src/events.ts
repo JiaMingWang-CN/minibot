@@ -12,4 +12,6 @@ export type KernelEvent =
   | { type: 'retry'; threadId: string; attempt: number; delayMs: number; message: string }
   /** 线程中 id >= fromId 的消息已删除（手动重试） */
   | { type: 'messages_deleted'; threadId: string; fromId: number }
-  | { type: 'thread_deleted'; threadId: string };
+  | { type: 'thread_deleted'; threadId: string }
+  /** 手机功能的状态变化（只经本机 WS 推送，不会发给手机） */
+  | { type: 'remote_changed' };

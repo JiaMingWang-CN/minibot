@@ -6,6 +6,7 @@ import path from 'node:path';
 import { URL } from 'node:url';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { Kernel } from '../kernel.ts';
+import type { RemoteService } from '../remote/service.ts';
 import { handleApi, sendJson } from './routes.ts';
 
 const AUTH_TIMEOUT_MS = 5000;
@@ -28,6 +29,7 @@ const MIME: Record<string, string> = {
 export interface ServerOptions {
   staticDir: string;
   port?: number;
+  remote?: RemoteService;
 }
 
 export interface ServerHandle {
@@ -123,7 +125,7 @@ export async function startServer(kernel: Kernel, o: ServerOptions): Promise<Ser
           sendJson(res, 401, { error: { code: 'unauthorized', message: '令牌无效' } });
           return;
         }
-        await handleApi(kernel, req, res, url);
+        await handleApi(kernel, req, res, url, o.remote);
         return;
       }
       await serveStatic(req, res, url.pathname);
@@ -131,6 +133,12 @@ export async function startServer(kernel: Kernel, o: ServerOptions): Promise<Ser
   });
 
   const wss = new WebSocketServer({ noServer: true });
+  const authenticatedClients = new Set<WebSocket>();
+  const unsubscribeRemote = o.remote?.on(() => {
+    for (const client of authenticatedClients) {
+      if (client.readyState === client.OPEN) client.send(JSON.stringify({ type: 'remote_changed' }));
+    }
+  });
 
   httpServer.on('upgrade', (req, socket, head) => {
     const host = req.headers.host;
@@ -171,6 +179,7 @@ export async function startServer(kernel: Kernel, o: ServerOptions): Promise<Ser
         const candidate = message as { type?: unknown; token?: unknown } | null;
         if (candidate?.type === 'auth' && typeof candidate.token === 'string' && safeEqual(candidate.token, token)) {
           authenticated = true;
+          authenticatedClients.add(ws);
           clearTimeout(timer);
           // 告诉客户端已经开始推送：此后再读的状态不会漏掉事件
           ws.send(JSON.stringify({ type: 'ready' }));
@@ -193,6 +202,7 @@ export async function startServer(kernel: Kernel, o: ServerOptions): Promise<Ser
 
     ws.on('close', () => {
       clearTimeout(timer);
+      authenticatedClients.delete(ws);
       unsubscribe();
     });
   });
@@ -214,6 +224,7 @@ export async function startServer(kernel: Kernel, o: ServerOptions): Promise<Ser
     close: async () => {
       if (closed) return;
       closed = true;
+      unsubscribeRemote?.();
       for (const client of wss.clients) client.terminate();
       const wssClosed = new Promise<void>((resolve) => wss.close(() => resolve()));
       httpServer.closeAllConnections?.();
