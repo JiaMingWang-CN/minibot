@@ -166,6 +166,33 @@ export function MainScreen({
     };
   }, [api, activeId, refreshStats]);
 
+  // 连上（含断线重连、页面重载）后重新同步：运行状态、待审批，以及断开期间漏掉的消息
+  useEffect(
+    () =>
+      events.onOpen(() => {
+        void (async () => {
+          try {
+            const threadId = activeRef.current;
+            const [runningIds, pending, latest] = await Promise.all([
+              api.runningThreads(),
+              api.pendingApprovals(),
+              threadId === null ? Promise.resolve(null) : api.listMessages(threadId, undefined, PAGE_SIZE),
+            ]);
+            setRunning(new Set(runningIds));
+            setApprovals(pending);
+            if (latest !== null && activeRef.current === threadId) {
+              const firstNew = latest[0]?.id ?? Infinity;
+              setMessages((list) => [...list.filter((m) => m.id < firstNew), ...latest]);
+              if (threadId !== null && !runningIds.includes(threadId)) setStreaming(null);
+            }
+          } catch {
+            // 同步失败不打扰用户，下次重连会再试
+          }
+        })();
+      }),
+    [events, api],
+  );
+
   // 往上翻：滚到顶附近时按最早一条消息的 id 再取一页，接在前面；保持正在看的位置不跳
   const loadOlder = async (): Promise<void> => {
     const threadId = activeRef.current;

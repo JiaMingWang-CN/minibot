@@ -9,6 +9,8 @@ import { cn } from '../lib/cn';
 import { t, type MessageKey } from '../i18n';
 import { ALL_LEVELS } from '../lib/models';
 import { ModelsEditor, fromDrafts, initialDrafts, type ModelDraft } from './ModelsEditor';
+import { Dialog } from '../ui/Dialog';
+import { PILL_DANGER, PILL_SECONDARY } from '../ui/recipes';
 import { Toast } from '../ui/Toast';
 import { BUTTON, BUTTON_DANGER, BUTTON_PRIMARY, Field, INPUT, SETTINGS_CARD, SelectField, errorText } from '../ui/settings';
 
@@ -92,6 +94,7 @@ function ProviderCard({
   const [toast, setToast] = useState<{ key: number; text: string } | null>(null);
   const closeToast = useCallback(() => setToast(null), []);
   const [testingId, setTestingId] = useState<string | null>(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const bodyId = useId();
 
@@ -257,7 +260,7 @@ function ProviderCard({
               {t('common.cancel')}
             </button>
           ) : (
-            <button type="button" className={BUTTON_DANGER} disabled={busy !== null} onClick={() => void remove()}>
+            <button type="button" className={BUTTON_DANGER} disabled={busy !== null} onClick={() => setConfirmingDelete(true)}>
               {t('settings.providers.delete')}
             </button>
           )}
@@ -268,6 +271,30 @@ function ProviderCard({
         </div>
       </div>
       <Toast toast={toast} onClose={closeToast} />
+      {!isNew && (
+        <Dialog
+          open={confirmingDelete}
+          onClose={() => setConfirmingDelete(false)}
+          title={t('settings.providers.deleteTitle', { name: provider.name })}
+          footer={
+            <>
+              <button type="button" className={PILL_SECONDARY} onClick={() => setConfirmingDelete(false)}>
+                {t('common.cancel')}
+              </button>
+              <button
+                type="button"
+                className={PILL_DANGER}
+                onClick={() => {
+                  setConfirmingDelete(false);
+                  void remove();
+                }}>
+                {t('common.delete')}
+              </button>
+            </>
+          }>
+          <p className="text-[13px] leading-5 text-ink-secondary">{t('settings.providers.deleteHint')}</p>
+        </Dialog>
+      )}
     </section>
   );
 }

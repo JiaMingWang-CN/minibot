@@ -10,12 +10,15 @@ export function Dialog({
   title,
   children,
   footer,
+  wide = false,
 }: {
   open: boolean;
   onClose: () => void;
   title: string;
   children?: ReactNode;
   footer: ReactNode;
+  /** 内容较多的对话框用更宽的卡片 */
+  wide?: boolean;
 }) {
   const card = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -43,7 +46,7 @@ export function Dialog({
         aria-modal="true"
         aria-label={title}
         tabIndex={-1}
-        className={`flex w-full max-w-[400px] animate-pop-in flex-col gap-4 rounded-2xl p-5 outline-none ${ELEVATED_FLOAT}`}>
+        className={`flex w-full ${wide ? 'max-w-[520px]' : 'max-w-[400px]'} animate-pop-in flex-col gap-4 rounded-2xl p-5 outline-none ${ELEVATED_FLOAT}`}>
         <h2 className="text-[16px] font-semibold">{title}</h2>
         {children}
         <div className="flex justify-end gap-2">{footer}</div>

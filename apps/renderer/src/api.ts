@@ -144,6 +144,7 @@ export function createApi(conn: Conn) {
       return call<SearchHit[]>('GET', `/api/search?${search.toString()}`);
     },
     pendingApprovals: () => call<ApprovalRequest[]>('GET', '/api/approvals'),
+    runningThreads: () => call<string[]>('GET', '/api/running'),
     /** 附件需要令牌才能读，取回后转成 blob: 地址给 <img> 用（CSP 允许 blob: 图片） */
     attachmentUrl: async (id: string): Promise<string> =>
       URL.createObjectURL(await (await request('GET', `/api/attachments/${enc(id)}`)).blob()),
@@ -156,6 +157,8 @@ export type ClientMessage =
 
 export interface EventConnection {
   send(message: ClientMessage): void;
+  /** 每次连上（含首次和断线重连）时通知；断开期间漏掉的事件要靠它重新同步 */
+  onOpen(listener: () => void): () => void;
   close(): void;
 }
 
@@ -164,6 +167,7 @@ export function connectEvents(conn: Conn, onEvent: (event: KernelEvent) => void)
   let socket: WebSocket | null = null;
   let stopped = false;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
+  const openListeners = new Set<() => void>();
 
   const open = (): void => {
     if (stopped) return;
@@ -173,7 +177,12 @@ export function connectEvents(conn: Conn, onEvent: (event: KernelEvent) => void)
     };
     socket.onmessage = (event) => {
       try {
-        onEvent(JSON.parse(String(event.data)) as KernelEvent);
+        const parsed = JSON.parse(String(event.data)) as { type?: unknown };
+        if (parsed.type === 'ready') {
+          for (const listener of openListeners) listener();
+          return;
+        }
+        onEvent(parsed as KernelEvent);
       } catch {
         // 忽略无法解析的事件
       }
@@ -188,6 +197,10 @@ export function connectEvents(conn: Conn, onEvent: (event: KernelEvent) => void)
   open();
 
   return {
+    onOpen(listener) {
+      openListeners.add(listener);
+      return () => openListeners.delete(listener);
+    },
     send(message) {
       if (socket !== null && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
     },

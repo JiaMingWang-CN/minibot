@@ -87,7 +87,7 @@ export async function startServer(kernel: Kernel, o: ServerOptions): Promise<Ser
       res.writeHead(200, {
         'content-type': MIME[path.extname(resolved).toLowerCase()] ?? 'application/octet-stream',
         'content-length': String(content.length),
-        // 脚本只允许本机来源；样式要放开内联：Astryx 运行时往 <head> 插 <style>（弹出层定位、代码高亮），不支持 nonce。
+        // 脚本只允许本机来源；样式要放开内联：界面里 React 的 style 属性（弹出层定位等）属于内联样式。
         // 图片附件需带令牌读取，界面把它转成 blob: 地址显示。
         'content-security-policy': `default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob:; connect-src 'self' ws://127.0.0.1:${port}`,
         'x-content-type-options': 'nosniff',
@@ -172,6 +172,8 @@ export async function startServer(kernel: Kernel, o: ServerOptions): Promise<Ser
         if (candidate?.type === 'auth' && typeof candidate.token === 'string' && safeEqual(candidate.token, token)) {
           authenticated = true;
           clearTimeout(timer);
+          // 告诉客户端已经开始推送：此后再读的状态不会漏掉事件
+          ws.send(JSON.stringify({ type: 'ready' }));
         } else {
           ws.close(4401, 'unauthorized');
         }

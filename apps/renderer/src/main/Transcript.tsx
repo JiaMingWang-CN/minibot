@@ -1,7 +1,7 @@
 // 对话记录：用户消息是右侧的灰色气泡；模型回复不加气泡，直接排版 Markdown，
 // 思考过程和工具调用折叠在回复里；摘要与提示是居中的系统行。
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { memo, useEffect, useState, type ReactNode } from 'react';
 import type { Block, StoredMessage } from '@minibot/core';
 import { Check, ChevronRight, CircleSlash, Loader2, X } from 'lucide-react';
 import Markdown from 'react-markdown';
@@ -38,13 +38,14 @@ function toolArgument(input: Record<string, unknown>): string {
   return '';
 }
 
-export function MarkdownText({ children, streaming = false }: { children: string; streaming?: boolean }) {
+// memo：流式输出时每个 delta 都会让整个对话重新渲染，没变的消息不能重新解析 Markdown
+export const MarkdownText = memo(function MarkdownText({ children, streaming = false }: { children: string; streaming?: boolean }) {
   return (
     <div className={cn('markdown', streaming && 'after:ml-0.5 after:inline-block after:h-4 after:w-[2px] after:translate-y-0.5 after:animate-pulse after:bg-ink')}>
       <Markdown remarkPlugins={[remarkGfm]}>{children}</Markdown>
     </div>
   );
-}
+});
 
 function Disclosure({ summary, children, defaultOpen = false }: { summary: ReactNode; children: ReactNode; defaultOpen?: boolean }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -63,7 +64,7 @@ function Disclosure({ summary, children, defaultOpen = false }: { summary: React
   );
 }
 
-function ToolCall({ use, result, running }: { use: ToolUse; result: ToolResult | undefined; running: boolean }) {
+const ToolCall = memo(function ToolCall({ use, result, running }: { use: ToolUse; result: ToolResult | undefined; running: boolean }) {
   const label = TOOL_LABEL[use.name];
   const status =
     result === undefined ? (
@@ -90,7 +91,7 @@ function ToolCall({ use, result, running }: { use: ToolUse; result: ToolResult |
       </pre>
     </Disclosure>
   );
-}
+});
 
 function Attachment({ api, id }: { api: Api; id: string }) {
   const [url, setUrl] = useState<string | null>(null);

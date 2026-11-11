@@ -118,6 +118,10 @@ async function route(
     );
     return;
   }
+  if (method === 'GET' && pathname === '/api/running') {
+    sendJson(res, 200, kernel.runningThreads());
+    return;
+  }
   if (method === 'GET' && pathname === '/api/approvals') {
     sendJson(res, 200, kernel.pendingApprovals());
     return;

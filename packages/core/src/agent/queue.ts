@@ -45,6 +45,10 @@ export class ThreadQueue {
     return next;
   }
 
+  runningIds(): string[] {
+    return [...this.lanes].filter(([, lane]) => lane.running).map(([id]) => id);
+  }
+
   abort(threadId: string): void {
     this.lanes.get(threadId)?.current?.abort();
   }

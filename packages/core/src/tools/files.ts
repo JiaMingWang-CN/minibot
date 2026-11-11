@@ -16,6 +16,8 @@ export const ERR_TOPIC_PATH =
 const MAX_READ_LINES = 2000;
 const MAX_LINE_CHARS = 2000;
 const BINARY_CHECK_BYTES = 8192;
+/** 超过这个大小的文件整个读进内存再切行不划算，也放不进上下文 */
+export const MAX_READ_BYTES = 10 * 1024 * 1024;
 
 function fail(content: string): ToolOutput {
   return { content, isError: true };
@@ -52,6 +54,10 @@ export async function readFile(
 ): Promise<ToolOutput> {
   let bytes: Buffer;
   try {
+    const { size } = await fs.stat(real);
+    if (size > MAX_READ_BYTES) {
+      return fail(`文件太大（${Math.ceil(size / 1024 / 1024)} MB，上限 ${MAX_READ_BYTES / 1024 / 1024} MB），请用 grep 搜索需要的部分。`);
+    }
     bytes = await fs.readFile(real);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return fail('文件不存在。');

@@ -12,6 +12,7 @@ import {
   readFile,
   writeFile,
   editFile,
+  MAX_READ_BYTES,
   ERR_STALE,
   ERR_PLACEHOLDER,
   ERR_SECRET_IN_MEMORY,
@@ -80,6 +81,16 @@ test('read：UTF-16 文件（BOM FF FE / FE FF）给出专门提示', async () =
     assert.ok(result.content.includes('UTF-16 编码，暂不支持'));
     assert.equal(result.content.includes('二进制'), false);
   }
+  close();
+});
+
+test('read：超过大小上限的文件不读，提示改用 grep', async () => {
+  const { root, ctx, close } = await setup();
+  const file = path.join(root, 'huge.txt');
+  await fs.writeFile(file, 'x'.repeat(MAX_READ_BYTES + 1));
+  const result = await readFile(ctx, file, {});
+  assert.equal(result.isError, true);
+  assert.ok(result.content.includes('太大'));
   close();
 });
 

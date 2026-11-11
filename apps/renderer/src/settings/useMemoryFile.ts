@@ -20,7 +20,7 @@ export function useMemoryFile(api: Api, path: string | null, version = 0) {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const load = useCallback(async (): Promise<void> => {
+  const load = useCallback(async (keepDraft = false): Promise<void> => {
     if (path === null) return;
     // 文件还没建时按空内容编辑；内核写入时同样把不存在的文件当作空内容比对
     const read = api.readMemoryFile(path).catch((err: unknown) => {
@@ -29,7 +29,7 @@ export function useMemoryFile(api: Api, path: string | null, version = 0) {
     });
     const [file, list] = await Promise.all([read, api.listRevisions(path)]);
     setSaved(file);
-    setDraft(file.content);
+    if (!keepDraft) setDraft(file.content);
     setRevisions([...list].reverse());
   }, [api, path]);
 
@@ -57,7 +57,8 @@ export function useMemoryFile(api: Api, path: string | null, version = 0) {
       await job();
     } catch (err) {
       if (err instanceof ApiError && err.code === 'conflict') {
-        await load().catch(() => {});
+        // 只更新基准版本，草稿原样保留；再保存一次就是确认覆盖对方的改动
+        await load(true).catch(() => {});
         setError(t('memory.conflict'));
       } else setError(errorText(err));
     } finally {

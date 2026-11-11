@@ -231,6 +231,27 @@ test('Linux basic_text：addProvider 带 apiKey → KernelError key_not_persista
   }
 });
 
+test('updateBot：name / persona / model 必须是字符串，workspace 必须是绝对路径或 null', async () => {
+  const root = await tmpRoot();
+  const kernel = await Kernel.open({ dataRoot: root, crypto: fakeCrypto('keychain'), callModel: echoModel() });
+  const provider = await kernel.addProvider({
+    name: 'P',
+    format: 'chat_completions',
+    baseUrl: 'http://x',
+    apiKey: 'sk-12345678',
+  });
+  const bot = await kernel.completeOnboarding({ providerId: provider.id, model: 'm' });
+  for (const patch of [{ name: 1 }, { persona: null }, { model: {} }, { workspace: 'relative/dir' }, { workspace: 5 }]) {
+    await assert.rejects(
+      kernel.updateBot(bot.id, patch as never),
+      (err: unknown) => err instanceof KernelError && err.code === 'invalid',
+    );
+  }
+  assert.equal((await kernel.updateBot(bot.id, { workspace: root })).workspace, root);
+  assert.equal((await kernel.updateBot(bot.id, { workspace: null })).workspace, null);
+  await kernel.close();
+});
+
 test('updateProvider：apiKeyEnv 传空串清除；校验失败时不留下半截修改', async () => {
   const root = await tmpRoot();
   const kernel = await Kernel.open({ dataRoot: root, crypto: fakeCrypto('keychain'), callModel: echoModel() });

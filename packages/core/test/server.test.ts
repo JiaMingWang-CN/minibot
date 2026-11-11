@@ -241,6 +241,24 @@ test('WS：5 秒内未鉴权 → close 4401；鉴权后能收到事件', async (
   }
 });
 
+test('WS：鉴权通过后先收到 ready；/api/running 列出正在运行的线程', async () => {
+  const h = await setup();
+  try {
+    assert.deepEqual(JSON.parse((await request(h.server, { path: '/api/running' })).text), []);
+    const ws = new WebSocket(`ws://127.0.0.1:${h.server.port}/ws`, { origin: h.server.origin });
+    const first = new Promise<unknown>((resolve) => ws.once('message', (data) => resolve(JSON.parse(String(data)))));
+    await new Promise<void>((resolve, reject) => {
+      ws.on('open', () => resolve());
+      ws.on('error', reject);
+    });
+    ws.send(JSON.stringify({ type: 'auth', token: h.server.token }));
+    assert.deepEqual(await first, { type: 'ready' });
+    ws.terminate();
+  } finally {
+    await h.close();
+  }
+});
+
 test('WS：令牌不出现在 URL 里也能完成鉴权', async () => {
   const h = await setup();
   try {

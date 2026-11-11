@@ -537,11 +537,23 @@ export class Kernel {
       if (typeof patch.memoryEnabled !== 'boolean') throw new KernelError('invalid', 'memoryEnabled 必须是布尔值');
       bot.memoryEnabled = patch.memoryEnabled;
     }
+    for (const key of ['name', 'persona', 'providerId', 'model'] as const) {
+      const value: unknown = patch[key];
+      if (value !== undefined && typeof value !== 'string') {
+        throw new KernelError('invalid', `${key} 必须是字符串`);
+      }
+    }
     if (patch.name !== undefined) bot.name = patch.name;
     if (patch.persona !== undefined) bot.persona = patch.persona;
     if (patch.providerId !== undefined) bot.providerId = patch.providerId;
     if (patch.model !== undefined) bot.model = patch.model;
-    if (patch.workspace !== undefined) bot.workspace = patch.workspace;
+    if (patch.workspace !== undefined) {
+      const workspace: unknown = patch.workspace;
+      if (workspace !== null && (typeof workspace !== 'string' || !path.isAbsolute(workspace))) {
+        throw new KernelError('invalid', '工作目录必须是绝对路径');
+      }
+      bot.workspace = patch.workspace;
+    }
     if (patch.approvalMode !== undefined) {
       if (!APPROVAL_MODES.includes(patch.approvalMode)) {
         throw new KernelError('invalid', '审批模式无效');
@@ -870,7 +882,7 @@ export class Kernel {
     const job = this.queue.enqueue(threadId, async (signal) => {
       try {
         const bot = await this.loadBotOrThrow(thread.botId);
-        await compactThread(
+        const compacted = await compactThread(
           {
             db: this.db,
             callModel: this.callModel,
@@ -883,6 +895,17 @@ export class Kernel {
           'auto',
           signal,
         );
+        if (!compacted) {
+          // 点了压缩却没有任何反应会让人以为坏了
+          const notice = appendMessage(this.db, {
+            threadId,
+            role: 'user',
+            blocks: [{ type: 'text', text: '对话还很短，没有需要压缩的内容。' }],
+            kind: 'notice',
+            interrupted: false,
+          });
+          this.emit({ type: 'message', threadId, message: notice });
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         const notice = appendMessage(this.db, {
@@ -924,6 +947,11 @@ export class Kernel {
       this.pendingJobs.add(tracked);
     }
     return ok;
+  }
+
+  /** 正在运行（含刚开始、还没进队列）的线程；界面重连或重载后据此恢复运行状态 */
+  runningThreads(): string[] {
+    return [...new Set([...this.activeTurns, ...this.queue.runningIds()])];
   }
 
   pendingApprovals(): ApprovalRequest[] {

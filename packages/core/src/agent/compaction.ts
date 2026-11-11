@@ -123,7 +123,7 @@ export async function compactThread(
   threadId: string,
   keepFromId: number | 'auto',
   signal: AbortSignal,
-): Promise<void> {
+): Promise<boolean> {
   const thread = getThread(deps.db, threadId);
   if (thread === null) throw new Error('线程不存在');
   const summaryMessage =
@@ -140,7 +140,7 @@ export async function compactThread(
   }
 
   const toSummarize = combined.slice(0, boundaryIndex).filter((m) => m.kind !== 'notice');
-  if (toSummarize.length === 0) return;
+  if (toSummarize.length === 0) return false;
   let summaryText = '';
   let summaryUsage: Usage | undefined;
   {
@@ -193,6 +193,7 @@ export async function compactThread(
     lastInputTokens: null,
     lastInputMsgId: null,
   });
+  return true;
 }
 
 export function makePrepareContext(
