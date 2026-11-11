@@ -2,30 +2,17 @@
 // 切换直接生效（改的是 bot 的设置，下一轮起使用），不弹确认。
 
 import { useCallback, useState } from 'react';
-import type { Bot, KernelState, ThinkingLevel } from '@minibot/core';
+import type { Bot, ThinkingLevel } from '@minibot/core';
 import { ChevronDown } from 'lucide-react';
 import type { PresetWithModels } from '../api';
 import { cn } from '../lib/cn';
 import { t, type MessageKey } from '../i18n';
+import { specOf, type ProviderInfo } from '../lib/models';
 import { Dialog } from '../ui/Dialog';
 import { Menu, type MenuItem } from '../ui/Menu';
 import { FIELD, PILL_PRIMARY, PILL_SECONDARY } from '../ui/recipes';
 
-type ProviderInfo = KernelState['providers'][number];
-export type BotPatch = Partial<Pick<Bot, 'providerId' | 'model' | 'contextWindow' | 'thinkingLevel' | 'approvalMode'>>;
-
-const ALL_LEVELS: ThinkingLevel[] = ['off', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
-
-/** 与内核 allowedThinkingLevels 同一规则：预设模型自带的档位优先，其次预设的，没有预设按接口格式 */
-function thinkingLevels(provider: ProviderInfo | undefined, preset: PresetWithModels | undefined, model: string): ThinkingLevel[] {
-  if (provider === undefined) return [];
-  if (preset !== undefined) {
-    if (preset.thinkingLevels.length === 0) return [];
-    const known = preset.models.find((m) => m.id.toLowerCase() === model.toLowerCase());
-    return known?.thinkingLevels ?? preset.thinkingLevels;
-  }
-  return provider.format === 'anthropic_messages' ? ALL_LEVELS.filter((l) => l !== 'none' && l !== 'minimal') : ALL_LEVELS;
-}
+export type BotPatch = Partial<Pick<Bot, 'providerId' | 'model' | 'contextWindow' | 'maxOutputTokens' | 'thinkingLevel' | 'approvalMode'>>;
 
 function levelLabel(level: ThinkingLevel | null): string {
   return t(level === null ? 'main.thinkingAuto' : (`thinking.${level}` as MessageKey));
@@ -50,22 +37,26 @@ export function ModelPicker({
   const [custom, setCustom] = useState<ProviderInfo | null>(null);
   const [customName, setCustomName] = useState('');
   const closeCustom = useCallback(() => setCustom(null), []);
-  const contextWindowOf = (provider: ProviderInfo, model: string): number => {
-    const preset = presetOf(provider);
-    const known = preset?.models.find((m) => m.id.toLowerCase() === model.toLowerCase());
-    return known?.contextWindow ?? preset?.contextWindow ?? 128_000;
+  const patchFor = (provider: ProviderInfo, model: string): BotPatch => {
+    const spec = specOf(provider, presetOf(provider), model);
+    return {
+      providerId: provider.id,
+      model,
+      contextWindow: spec.contextWindow,
+      ...(spec.maxOutputTokens !== null ? { maxOutputTokens: spec.maxOutputTokens } : {}),
+    };
   };
   const saveCustom = (): void => {
     const model = customName.trim();
     if (custom === null || model === '') return;
-    onChange({ providerId: custom.id, model, contextWindow: contextWindowOf(custom, model) });
+    onChange(patchFor(custom, model));
     setCustom(null);
   };
 
   const items: MenuItem[] = [];
   for (const provider of providers.filter((p) => p.hasKey || p.id === bot.providerId)) {
     const preset = presetOf(provider);
-    const ids = (preset?.models ?? []).map((m) => m.id);
+    const ids = [...new Set([...(provider.models ?? []).map((m) => m.id), ...(preset?.models ?? []).map((m) => m.id)])];
     if (provider.id === bot.providerId && !ids.includes(bot.model)) ids.unshift(bot.model);
     items.push({ type: 'label', label: provider.name });
     for (const id of ids) {
@@ -75,7 +66,7 @@ export function ModelPicker({
         checked: selected,
         onSelect: () => {
           if (selected) return;
-          onChange({ providerId: provider.id, model: id, contextWindow: contextWindowOf(provider, id) });
+          onChange(patchFor(provider, id));
         },
       });
     }
@@ -87,7 +78,7 @@ export function ModelPicker({
       },
     });
   }
-  const levels = thinkingLevels(current, presetOf(current), bot.model);
+  const levels = specOf(current, presetOf(current), bot.model).thinkingLevels;
   if (levels.length > 0) {
     items.push({ type: 'separator' }, { type: 'label', label: t('main.thinkingLevel') });
     for (const level of [null, ...levels]) {

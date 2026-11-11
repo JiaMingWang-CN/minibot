@@ -5,7 +5,7 @@ import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { dataPaths, type DataPaths } from './paths.ts';
 import { APPROVAL_MODES } from './config/types.ts';
-import type { AppConfig, ApiFormat, Bot, Preset, Provider, ThinkingLevel } from './config/types.ts';
+import type { AppConfig, ApiFormat, Bot, CustomModel, Preset, Provider, ThinkingLevel } from './config/types.ts';
 import {
   loadBot,
   loadConfig,
@@ -14,6 +14,7 @@ import {
   effectiveWorkspace,
   listBots,
   randomPersona,
+  parseCustomModels,
 } from './config/config.ts';
 import { allowedThinkingLevels, defaultContextWindow, listPresets } from './config/presets.ts';
 import { atomicWriteFile } from './fs/atomic-write.ts';
@@ -143,6 +144,15 @@ export interface AddProviderInput {
   apiKey?: string;
   apiKeyEnv?: string;
   presetId?: string;
+  models?: CustomModel[];
+}
+
+function checkedModels(raw: unknown): CustomModel[] {
+  try {
+    return parseCustomModels(raw, true);
+  } catch (err) {
+    throw new KernelError('invalid', err instanceof Error ? err.message : String(err));
+  }
 }
 
 export class Kernel {
@@ -365,6 +375,7 @@ export class Kernel {
     };
     if (i.apiKeyEnv !== undefined) provider.apiKeyEnv = i.apiKeyEnv;
     if (i.presetId !== undefined) provider.presetId = i.presetId;
+    if (i.models !== undefined) provider.models = checkedModels(i.models);
     if (i.apiKey !== undefined && i.apiKey.length > 0) {
       await this.secretStore.set(provider.id, i.apiKey);
     }
@@ -408,6 +419,7 @@ export class Kernel {
       }
       provider.presetId = patch.presetId;
     }
+    if (patch.models !== undefined) provider.models = checkedModels(patch.models);
     if (patch.apiKey !== undefined && patch.apiKey.length > 0) {
       if (!this.secretStore.canPersist()) {
         throw new KernelError('key_not_persistable', '当前系统没有可用的密钥库，无法保存 API Key');

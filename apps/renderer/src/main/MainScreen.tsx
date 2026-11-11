@@ -23,6 +23,7 @@ import { CommandAllowlistDialog } from './CommandAllowlistDialog';
 import { BotPanel } from '../panel/BotPanel';
 import { SettingsDialog, type SettingsPageId } from '../settings/SettingsDialog';
 import { Sidebar } from './Sidebar';
+import { specOf } from '../lib/models';
 import { MarkdownText, SystemLine, Transcript, textOf } from './Transcript';
 
 const MAX_IMAGES = 4;
@@ -324,6 +325,10 @@ export function MainScreen({
 
   const addImages = (files: File[]): void => {
     setComposerError(null);
+    if (!visionOk) {
+      setComposerError(t('main.imageUnsupported', { model: bot.model }));
+      return;
+    }
     const accepted: PendingImage[] = [];
     for (const file of files) {
       if (!IMAGE_TYPES.includes(file.type)) {
@@ -416,6 +421,10 @@ export function MainScreen({
   const canRetry = !isRunning && lastMessage !== undefined && lastMessage.kind === 'notice';
   const showStreaming = streaming !== null && (streaming.text.length > 0 || streaming.reasoning.length > 0);
   const empty = messages.length === 0 && !showStreaming;
+  const currentProvider = providers.find((p) => p.id === bot.providerId);
+  const visionOk = specOf(currentProvider, presets.find((x) => x.id === currentProvider?.presetId), bot.model).vision;
+  // 接口不一定流式返回推理内容：开了思考档位时，等待期也显示“思考中”
+  const thinkingOn = bot.thinkingLevel !== null && bot.thinkingLevel !== 'off' && bot.thinkingLevel !== 'none';
 
   return (
     <div className="flex h-full flex-col bg-frame">
@@ -524,7 +533,7 @@ export function MainScreen({
                     </div>
                   )}
                   {isRunning && !showStreaming && lastMessage?.role === 'user' && (
-                    <span className="animate-pulse text-[13px] text-ink-tertiary">{t('main.waiting')}</span>
+                    <span className="animate-pulse text-[13px] text-ink-tertiary">{thinkingOn ? t('main.thinkingNow') : t('main.waiting')}</span>
                   )}
                   {retryNote !== null && <SystemLine>{retryNote}</SystemLine>}
                   {steered.map((text, i) => (
@@ -555,7 +564,7 @@ export function MainScreen({
                 disabled={activeId === null}
                 placeholder={isRunning ? t('main.placeholderRunning') : t('main.placeholder', { name: bot.name })}
                 images={images}
-                canAddImage={images.length < MAX_IMAGES}
+                canAddImage={visionOk && images.length < MAX_IMAGES}
                 onAddImages={addImages}
                 onRemoveImage={removeImage}
                 error={composerError}

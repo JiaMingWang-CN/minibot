@@ -1,6 +1,6 @@
 import presetsData from './presets.json' with { type: 'json' };
 import { THINKING_LEVELS } from './types.ts';
-import type { KnownModel, Preset, Provider, ThinkingLevel } from './types.ts';
+import type { CustomModel, KnownModel, Preset, Provider, ThinkingLevel } from './types.ts';
 
 interface PresetsFile {
   presets: Preset[];
@@ -41,7 +41,15 @@ function findKnownModel(preset: Preset, model?: string): KnownModel | undefined 
   return set.find((m) => m.id.toLowerCase() === lowered);
 }
 
+export function findCustomModel(provider: Provider, model?: string): CustomModel | undefined {
+  if (model === undefined) return undefined;
+  const lowered = model.toLowerCase();
+  return provider.models?.find((m) => m.id.toLowerCase() === lowered);
+}
+
 export function defaultContextWindow(provider: Provider, model?: string): number {
+  const custom = findCustomModel(provider, model);
+  if (custom !== undefined) return custom.contextWindow;
   const preset = provider.presetId === undefined ? undefined : findPreset(provider.presetId);
   if (preset === undefined) return 128_000;
   const known = findKnownModel(preset, model);
@@ -49,6 +57,8 @@ export function defaultContextWindow(provider: Provider, model?: string): number
 }
 
 export function allowedThinkingLevels(provider: Provider, model?: string): ThinkingLevel[] {
+  const custom = findCustomModel(provider, model);
+  if (custom !== undefined) return [...custom.thinkingLevels];
   const preset = provider.presetId === undefined ? undefined : findPreset(provider.presetId);
   if (preset !== undefined) {
     if (preset.thinkingLevels.length === 0) return [];

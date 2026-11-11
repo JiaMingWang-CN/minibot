@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import { atomicWriteFile } from '../fs/atomic-write.ts';
 import type { DataPaths } from '../paths.ts';
-import type { AppConfig, Bot, Provider } from './types.ts';
+import type { AppConfig, Bot, CustomModel, Provider, ThinkingLevel } from './types.ts';
 import { APPROVAL_MODES, THINKING_LEVELS } from './types.ts';
 
 import personasData from './default-personas.json' with { type: 'json' };
@@ -96,6 +96,47 @@ function isThinkingLevel(v: unknown): boolean {
   return typeof v === 'string' && (THINKING_LEVELS as readonly string[]).includes(v);
 }
 
+function positiveInt(v: unknown): number | null {
+  return typeof v === 'number' && Number.isInteger(v) && v > 0 ? v : null;
+}
+
+/** 解析服务下的模型列表；严格模式（用户输入）遇到坏项抛错，宽松模式（读盘）跳过坏项 */
+export function parseCustomModels(raw: unknown, strict: boolean): CustomModel[] {
+  if (!Array.isArray(raw)) {
+    if (strict) throw new Error('models 必须是数组');
+    return [];
+  }
+  const seen = new Set<string>();
+  const models: CustomModel[] = [];
+  for (const item of raw) {
+    const id = isRecord(item) && typeof item['id'] === 'string' ? item['id'].trim() : '';
+    const contextWindow = isRecord(item) ? positiveInt(item['contextWindow']) : null;
+    const maxOutputTokens = isRecord(item) ? positiveInt(item['maxOutputTokens']) : null;
+    const levels = isRecord(item) ? item['thinkingLevels'] : undefined;
+    const valid =
+      id.length > 0 &&
+      contextWindow !== null &&
+      maxOutputTokens !== null &&
+      isRecord(item) &&
+      typeof item['vision'] === 'boolean' &&
+      Array.isArray(levels) &&
+      levels.every(isThinkingLevel);
+    if (!valid || seen.has(id.toLowerCase())) {
+      if (strict) throw new Error(`模型“${id}”的参数无效或重复`);
+      continue;
+    }
+    seen.add(id.toLowerCase());
+    models.push({
+      id,
+      contextWindow,
+      maxOutputTokens,
+      vision: item['vision'] as boolean,
+      thinkingLevels: [...new Set(levels as ThinkingLevel[])],
+    });
+  }
+  return models;
+}
+
 function migrateProvider(raw: unknown, index: number): Provider {
   if (!isRecord(raw)) throw new Error(`providers[${index}] 不是对象`);
   const { id, name, format, baseUrl } = raw;
@@ -109,6 +150,7 @@ function migrateProvider(raw: unknown, index: number): Provider {
   const provider: Provider = { id, name, format, baseUrl };
   if (typeof raw['apiKeyEnv'] === 'string') provider.apiKeyEnv = raw['apiKeyEnv'];
   if (typeof raw['presetId'] === 'string') provider.presetId = raw['presetId'];
+  if (Array.isArray(raw['models'])) provider.models = parseCustomModels(raw['models'], false);
   return provider;
 }
 

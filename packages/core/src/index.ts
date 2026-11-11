@@ -33,6 +33,7 @@ export type {
   Provider,
   Preset,
   KnownModel,
+  CustomModel,
   AppConfig,
   ApiFormat,
   ThinkingLevel,

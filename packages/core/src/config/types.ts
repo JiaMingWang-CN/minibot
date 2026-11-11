@@ -20,6 +20,18 @@ export interface Provider {
   baseUrl: string;
   apiKeyEnv?: string;
   presetId?: string;
+  models?: CustomModel[];
+}
+
+/** 用户在服务下自己维护的模型；与预设里同名的模型相比优先 */
+export interface CustomModel {
+  id: string;
+  contextWindow: number;
+  maxOutputTokens: number;
+  /** 是否支持图像识别 */
+  vision: boolean;
+  /** 支持的推理档位；空数组表示不支持推理档位 */
+  thinkingLevels: ThinkingLevel[];
 }
 
 export interface AppConfig {

@@ -7,6 +7,8 @@ import { ChevronRight, Eye, EyeOff, Plus } from 'lucide-react';
 import type { Api, PresetWithModels } from '../api';
 import { cn } from '../lib/cn';
 import { t, type MessageKey } from '../i18n';
+import { ALL_LEVELS } from '../lib/models';
+import { ModelsEditor, fromDrafts, toDrafts, type ModelDraft } from './ModelsEditor';
 import { BUTTON, BUTTON_DANGER, BUTTON_PRIMARY, Field, INPUT, SETTINGS_CARD, SelectField, errorText } from '../ui/settings';
 
 type ProviderInfo = KernelState['providers'][number];
@@ -86,6 +88,7 @@ function ProviderCard({
   const [apiKeyEnv, setApiKeyEnv] = useState(provider?.apiKeyEnv ?? '');
   const defaultModel = provider !== null && provider.id === bot.providerId ? bot.model : (preset?.models[0]?.id ?? '');
   const [testModel, setTestModel] = useState(defaultModel);
+  const [drafts, setDrafts] = useState<ModelDraft[]>(() => toDrafts(provider?.models));
   const [busy, setBusy] = useState<'saving' | 'testing' | 'deleting' | null>(null);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const bodyId = useId();
@@ -117,11 +120,12 @@ function ProviderCard({
   const save = (): Promise<void> =>
     run('saving', async () => {
       if (baseUrl.trim() === '') throw new Error(t('onboarding.error.baseUrl'));
+      const models = fromDrafts(drafts);
       if (isNew) {
         if (preset === undefined) throw new Error(t('settings.providers.pickPreset'));
-        await api.addProvider({ name: name.trim() || preset.name, format: preset.format, baseUrl: baseUrl.trim(), presetId: preset.id, ...keyFields() });
+        await api.addProvider({ name: name.trim() || preset.name, format: preset.format, baseUrl: baseUrl.trim(), presetId: preset.id, ...(models.length > 0 ? { models } : {}), ...keyFields() });
       } else {
-        await api.updateProvider(provider.id, { name: name.trim() || provider.name, baseUrl: baseUrl.trim(), ...keyFields() });
+        await api.updateProvider(provider.id, { name: name.trim() || provider.name, baseUrl: baseUrl.trim(), models, ...keyFields() });
       }
       setApiKey('');
       if (!isNew) setReplacing(false);
@@ -211,6 +215,13 @@ function ProviderCard({
             {useEnv ? t('settings.providers.useKey') : t('settings.providers.useEnv')}
           </button>
         )}
+
+        <ModelsEditor
+          drafts={drafts}
+          onChange={setDrafts}
+          levels={(preset?.format ?? provider?.format) === 'anthropic_messages' ? ALL_LEVELS.filter((l) => l !== 'none' && l !== 'minimal') : ALL_LEVELS}
+          defaultContextWindow={preset?.contextWindow ?? 128_000}
+        />
 
         {!isNew && (
           <Field label={t('settings.providers.testModel')}>
