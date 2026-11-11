@@ -94,7 +94,9 @@ export function SettingsPage({ bot, patch, isRunning, onOpenAllowlist }: PanelCo
                 tooltip: t(`approvalMode.${mode}.desc` as MessageKey),
               }))}
             />
-            <p className="mt-2 text-[12px] leading-4 text-ink-tertiary">{t(`approvalMode.${bot.approvalMode}.desc` as MessageKey)}</p>
+            <p className={cn('mt-2 text-[12px] leading-4', bot.approvalMode === 'auto' ? 'text-warning' : 'text-ink-tertiary')}>
+              {t(`approvalMode.${bot.approvalMode}.desc` as MessageKey)}
+            </p>
           </div>
           {bot.allowedCommands.length > 0 && (
             <div className="flex min-w-0 flex-col gap-1 pl-[26px]">

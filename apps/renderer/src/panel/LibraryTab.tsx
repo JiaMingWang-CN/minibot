@@ -12,14 +12,14 @@ export function shortPath(p: string): string {
   return parts.length <= 2 ? p : `…/${parts.slice(-2).join('/')}`;
 }
 
-export function LibraryTab({ api, bot, open }: PanelContext) {
+export function LibraryTab({ api, bot, open, memoryVersion }: PanelContext) {
   const [topics, setTopics] = useState<number | null>(null);
   useEffect(() => {
     api
       .listMemory(bot.id)
       .then((m) => setTopics(m.topics.length))
       .catch(() => setTopics(null));
-  }, [api, bot.id]);
+  }, [api, bot.id, memoryVersion]);
 
   const memoryValue = !bot.memoryEnabled
     ? t('panel.memory.off')

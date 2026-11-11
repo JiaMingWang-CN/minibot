@@ -112,6 +112,8 @@ export interface KernelState {
   canPersistKeys: boolean;
   /** secrets.bin 存在但无法解密（如系统密钥库被重置），需要重新填写 Key */
   secretsUnreadable: boolean;
+  /** 每个 bot 未指定工作目录时使用的默认目录（bot id → 路径） */
+  defaultWorkspaces: Record<string, string>;
 }
 
 export interface OpenOptions {
@@ -325,6 +327,7 @@ export class Kernel {
       bots,
       canPersistKeys: this.secretStore.canPersist(),
       secretsUnreadable: this.secretStore.isUnreadable(),
+      defaultWorkspaces: Object.fromEntries(bots.map((b) => [b.id, this.paths.defaultWorkspace(b.id)])),
     };
   }
 

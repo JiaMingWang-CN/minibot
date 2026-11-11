@@ -71,7 +71,9 @@ export function ApprovalModePicker({
                     {label(option)}
                     {selected && <Check size={14} className="shrink-0" aria-hidden />}
                   </span>
-                  <span className="text-[12px] leading-snug text-ink-secondary">{t(`approvalMode.${option}.desc` as MessageKey)}</span>
+                  <span className={cn('text-[12px] leading-snug', option === 'auto' ? 'text-warning' : 'text-ink-secondary')}>
+                    {t(`approvalMode.${option}.desc` as MessageKey)}
+                  </span>
                 </span>
               </button>
             );

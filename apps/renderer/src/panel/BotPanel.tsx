@@ -36,6 +36,10 @@ export interface PanelContext {
   usage: ThreadUsage | null;
   isRunning: boolean;
   threadId: string | null;
+  /** 每收到一次 memory_changed 加一，记忆相关的页据此刷新 */
+  memoryVersion: number;
+  /** 未指定工作目录时实际使用的目录 */
+  defaultWorkspace: string | undefined;
   onCompact: () => void;
   onOpenSettings: (page: SettingsPageId) => void;
   onOpenAllowlist: () => void;

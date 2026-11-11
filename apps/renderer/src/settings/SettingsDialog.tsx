@@ -14,11 +14,12 @@ import { ProvidersPage } from './ProvidersPage';
 
 export type SettingsPageId = 'general' | 'providers' | 'consolidation' | 'activity';
 
-const PAGES: { id: SettingsPageId; label: MessageKey; icon: LucideIcon; keywords: string[] }[] = [
-  { id: 'general', label: 'settings.page.general', icon: User, keywords: ['关于你', '画像', '用户', 'profile'] },
-  { id: 'providers', label: 'settings.page.providers', icon: KeyRound, keywords: ['供应商', 'key', 'api', 'base url', '模型', '密钥', '连接'] },
-  { id: 'consolidation', label: 'settings.page.consolidation', icon: Brain, keywords: ['记忆', '整理', '后台', '模型'] },
-  { id: 'activity', label: 'settings.page.activity', icon: ScrollText, keywords: ['审批', '记录', '历史', '批准', '拒绝', '命令'] },
+/** keywords 是语言包里用空格分隔的搜索词 */
+const PAGES: { id: SettingsPageId; label: MessageKey; icon: LucideIcon; keywords: MessageKey }[] = [
+  { id: 'general', label: 'settings.page.general', icon: User, keywords: 'settings.keywords.general' },
+  { id: 'providers', label: 'settings.page.providers', icon: KeyRound, keywords: 'settings.keywords.providers' },
+  { id: 'consolidation', label: 'settings.page.consolidation', icon: Brain, keywords: 'settings.keywords.consolidation' },
+  { id: 'activity', label: 'settings.page.activity', icon: ScrollText, keywords: 'settings.keywords.activity' },
 ];
 
 export function SettingsDialog({
@@ -28,9 +29,11 @@ export function SettingsDialog({
   presets,
   canPersistKeys,
   initialPage = 'general',
+  memoryVersion,
   onRefresh,
   onClose,
 }: {
+  memoryVersion: number;
   api: Api;
   bot: Bot;
   providers: KernelState['providers'];
@@ -44,7 +47,7 @@ export function SettingsDialog({
   const [query, setQuery] = useState('');
   const dialog = useRef<HTMLDivElement>(null);
   const q = query.trim().toLowerCase();
-  const visible = PAGES.filter((p) => q === '' || [t(p.label), ...p.keywords].some((k) => k.toLowerCase().includes(q)));
+  const visible = PAGES.filter((p) => q === '' || [t(p.label), ...t(p.keywords).split(' ')].some((k) => k.toLowerCase().includes(q)));
   const current = PAGES.find((p) => p.id === page)!;
 
   useEffect(() => {
@@ -69,7 +72,7 @@ export function SettingsDialog({
   }, [visible, page]);
 
   let body: ReactNode;
-  if (page === 'general') body = <GeneralPage api={api} bot={bot} />;
+  if (page === 'general') body = <GeneralPage api={api} bot={bot} memoryVersion={memoryVersion} />;
   else if (page === 'providers')
     body = <ProvidersPage api={api} bot={bot} providers={providers} presets={presets} canPersistKeys={canPersistKeys} onRefresh={onRefresh} />;
   else if (page === 'consolidation') body = <ConsolidationPage api={api} providers={providers} presets={presets} />;

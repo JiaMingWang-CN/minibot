@@ -2,9 +2,9 @@
 // 对话区：半透明的聊天头浮在消息上（左空 / 中间 bot / 右边上下文、模型、更多），
 // 消息列最宽 48rem 居中，输入框胶囊在底部。
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ApprovalRequest, Bot, KernelEvent, KernelState, SearchHit, StoredMessage, Thread, ThreadUsage } from '@minibot/core';
-import { ArrowDown, MoreHorizontal, X } from 'lucide-react';
+import { ArrowDown, MoreHorizontal, ShieldAlert, X } from 'lucide-react';
 import type { Subscribe } from '../App';
 import { fileToBase64, type Api, type BotPatch, type EventConnection, type PresetWithModels } from '../api';
 import { Logo } from '../brand/Logo';
@@ -14,7 +14,7 @@ import { t } from '../i18n';
 import { Dialog } from '../ui/Dialog';
 import { Menu } from '../ui/Menu';
 import { FIELD, ICON_BUTTON, PILL_DANGER, PILL_PRIMARY, PILL_SECONDARY } from '../ui/recipes';
-import { ApprovalCard } from './ApprovalCard';
+import { ApprovalCard, type ApprovalResult } from './ApprovalCard';
 import { ApprovalModePicker } from './ApprovalModePicker';
 import { Composer, IMAGE_TYPES, type PendingImage } from './Composer';
 import { ContextRing } from './ContextRing';
@@ -29,6 +29,11 @@ const MAX_IMAGES = 4;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 /** 离底部这么近时算“跟随最新”，新内容会自动滚到底 */
 const STICK_DISTANCE = 80;
+/** 一次读多少条消息；离顶部这么近时再往前读一页 */
+const PAGE_SIZE = 100;
+const LOAD_OLDER_DISTANCE = 200;
+/** 审批处理后卡片以“已处理”状态停留多久 */
+const RESOLVED_LINGER_MS = 1800;
 
 interface Streaming {
   text: string;
@@ -49,8 +54,10 @@ export function MainScreen({
   onBotChange,
   secretsUnreadable,
   canPersistKeys,
+  defaultWorkspaces,
   onRefresh,
 }: {
+  defaultWorkspaces: Record<string, string>;
   api: Api;
   events: EventConnection;
   subscribe: Subscribe;
@@ -72,7 +79,9 @@ export function MainScreen({
   const [messages, setMessages] = useState<StoredMessage[]>([]);
   const [running, setRunning] = useState<ReadonlySet<string>>(new Set());
   const [streaming, setStreaming] = useState<Streaming | null>(null);
-  const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
+  /** 待批准的请求；处理后带上 result，停留片刻再移除 */
+  const [approvals, setApprovals] = useState<(ApprovalRequest & { result?: ApprovalResult })[]>([]);
+  const [memoryVersion, setMemoryVersion] = useState(0);
   const [usage, setUsage] = useState<ThreadUsage | null>(null);
   const [context, setContext] = useState<{ tokens: number; window: number } | null>(null);
   const [retryNote, setRetryNote] = useState<string | null>(null);
@@ -89,6 +98,10 @@ export function MainScreen({
   const [failure, setFailure] = useState<string | null>(secretsUnreadable ? t('app.secretsUnreadable') : null);
   const [stuck, setStuck] = useState(true);
   const scroller = useRef<HTMLDivElement>(null);
+  const [hasOlder, setHasOlder] = useState(false);
+  const loadingOlder = useRef(false);
+  /** 往前接了一页后，要保持的“离底部的距离” */
+  const keepOffset = useRef<number | null>(null);
   const activeRef = useRef<string | null>(null);
   activeRef.current = activeId;
 
@@ -135,17 +148,48 @@ export function MainScreen({
     setRetryNote(null);
     setSteered([]);
     setStuck(true);
+    setHasOlder(false);
     if (activeId === null) return;
     let cancelled = false;
     api
-      .listMessages(activeId)
-      .then((list) => !cancelled && setMessages(list))
+      .listMessages(activeId, undefined, PAGE_SIZE)
+      .then((list) => {
+        if (cancelled) return;
+        setMessages(list);
+        setHasOlder(list.length === PAGE_SIZE);
+      })
       .catch((err: unknown) => setFailure(errorText(err)));
     refreshStats(activeId);
     return () => {
       cancelled = true;
     };
   }, [api, activeId, refreshStats]);
+
+  // 往上翻：滚到顶附近时按最早一条消息的 id 再取一页，接在前面；保持正在看的位置不跳
+  const loadOlder = async (): Promise<void> => {
+    const threadId = activeRef.current;
+    const first = messages[0];
+    const el = scroller.current;
+    if (threadId === null || first === undefined || el === null || loadingOlder.current) return;
+    loadingOlder.current = true;
+    try {
+      const older = await api.listMessages(threadId, first.id, PAGE_SIZE);
+      if (activeRef.current !== threadId) return;
+      keepOffset.current = el.scrollHeight - el.scrollTop;
+      setMessages((list) => [...older.filter((m) => m.id < (list[0]?.id ?? Infinity)), ...list]);
+      setHasOlder(older.length === PAGE_SIZE);
+    } catch (err) {
+      setFailure(errorText(err));
+    } finally {
+      loadingOlder.current = false;
+    }
+  };
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    if (el === null || keepOffset.current === null) return;
+    el.scrollTop = el.scrollHeight - keepOffset.current;
+    keepOffset.current = null;
+  }, [messages]);
 
   // 切换模型后上下文窗口跟着变，重新取一次占用
   useEffect(() => {
@@ -203,8 +247,14 @@ export function MainScreen({
           case 'approval_request':
             setApprovals((list) => [...list, event.request]);
             return;
-          case 'approval_resolved':
-            setApprovals((list) => list.filter((a) => a.id !== event.id));
+          case 'approval_resolved': {
+            const result = event.result as ApprovalResult;
+            setApprovals((list) => list.map((a) => (a.id === event.id ? { ...a, result } : a)));
+            setTimeout(() => setApprovals((list) => list.filter((a) => a.id !== event.id)), RESOLVED_LINGER_MS);
+            return;
+          }
+          case 'memory_changed':
+            setMemoryVersion((v) => v + 1);
             return;
           case 'messages_deleted':
             if (event.threadId !== current) return;
@@ -358,6 +408,10 @@ export function MainScreen({
   const closeDelete = useCallback(() => setDeleting(null), []);
 
   const activeApprovals = approvals.filter((a) => a.threadId === activeId);
+  // 别的对话也在等批准：侧栏标出来，输入框上方给一个跳过去的入口
+  const waitingElsewhere = approvals.filter((a) => a.result === undefined && a.threadId !== activeId);
+  const waitingThreads = new Set(approvals.filter((a) => a.result === undefined).map((a) => a.threadId));
+  const threadTitle = (id: string): string => threads.find((th) => th.id === id)?.title ?? '';
   const lastMessage = messages[messages.length - 1];
   const canRetry = !isRunning && lastMessage !== undefined && lastMessage.kind === 'notice';
   const showStreaming = streaming !== null && (streaming.text.length > 0 || streaming.reasoning.length > 0);
@@ -372,6 +426,7 @@ export function MainScreen({
           threads={threads}
           activeId={activeId}
           running={running}
+          waiting={waitingThreads}
           searchOpen={searchOpen}
           query={query}
           hits={hits}
@@ -428,6 +483,7 @@ export function MainScreen({
             onScroll={(e) => {
               const el = e.currentTarget;
               setStuck(el.scrollHeight - el.scrollTop - el.clientHeight < STICK_DISTANCE);
+              if (hasOlder && el.scrollTop < LOAD_OLDER_DISTANCE) void loadOlder();
             }}>
             <div role="log" aria-label={t('main.conversation', { name: bot.name })} className="chat-column flex min-h-full flex-col gap-5 pt-18 pb-6">
               {failure !== null && (
@@ -511,13 +567,33 @@ export function MainScreen({
                     onManageAllowlist={() => setAllowlistOpen(true)}
                   />
                 }
-                above={activeApprovals.map((request) => (
-                  <ApprovalCard
-                    key={request.id}
-                    request={request}
-                    onRespond={(approve, always) => events.send({ type: 'approval', id: request.id, approve, always })}
-                  />
-                ))}
+                above={
+                  <>
+                    {waitingElsewhere.length > 0 && (
+                      <div role="status" className="flex items-center gap-2 rounded-full bg-warning/10 py-1.5 pr-1.5 pl-3.5 text-[13px] text-warning">
+                        <ShieldAlert size={14} className="shrink-0" aria-hidden />
+                        <span className="min-w-0 flex-1 truncate">
+                          {t('approval.elsewhere', { count: waitingElsewhere.length, title: threadTitle(waitingElsewhere[0]!.threadId) })}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setActiveId(waitingElsewhere[0]!.threadId)}
+                          className="shrink-0 rounded-full px-2.5 py-0.5 font-medium hover:bg-warning/10">
+                          {t('approval.goThere')}
+                        </button>
+                      </div>
+                    )}
+                    {activeApprovals.map((request) => (
+                      <ApprovalCard
+                        key={request.id}
+                        request={request}
+                        source={`${bot.name} · ${threadTitle(request.threadId)}`}
+                        result={request.result}
+                        onRespond={(approve, always) => events.send({ type: 'approval', id: request.id, approve, always })}
+                      />
+                    ))}
+                  </>
+                }
               />
             </div>
           </footer>
@@ -533,6 +609,8 @@ export function MainScreen({
             usage={usage}
             isRunning={isRunning}
             threadId={activeId}
+            memoryVersion={memoryVersion}
+            defaultWorkspace={defaultWorkspaces[bot.id]}
             onCompact={compact}
             onOpenSettings={setSettingsPage}
             onOpenAllowlist={() => setAllowlistOpen(true)}
@@ -549,6 +627,7 @@ export function MainScreen({
           presets={presets}
           canPersistKeys={canPersistKeys}
           initialPage={settingsPage}
+          memoryVersion={memoryVersion}
           onRefresh={onRefresh}
           onClose={closeSettings}
         />

@@ -81,6 +81,7 @@ export function App() {
         onBotChange={setBot}
         secretsUnreadable={boot.state.secretsUnreadable}
         canPersistKeys={boot.state.canPersistKeys}
+        defaultWorkspaces={boot.state.defaultWorkspaces}
         onRefresh={async () => {
           const state = await boot.api.state();
           setBoot((b) => b && { ...b, state });

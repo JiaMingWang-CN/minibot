@@ -1,7 +1,7 @@
 // 读写一个记忆文件（用户画像或 bot 的某个记忆主题）：带着读到时的 hash 写回，
 // 期间被别处改过就报冲突并重新读一次，不覆盖别人的修改。
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Revision } from '@minibot/core';
 import type { Api } from '../api';
 import { ApiError } from '../api';
@@ -11,7 +11,8 @@ import { errorText } from '../ui/settings';
 /** sha256('')，与内核的 hash 格式（十六进制）一致 */
 const EMPTY_HASH = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 
-export function useMemoryFile(api: Api, path: string | null) {
+/** version 每收到一次 memory_changed 就加一：没有未保存的修改时重新读取 */
+export function useMemoryFile(api: Api, path: string | null, version = 0) {
   const [saved, setSaved] = useState<{ content: string; hash: string } | null>(null);
   const [draft, setDraft] = useState('');
   const [revisions, setRevisions] = useState<Revision[]>([]);
@@ -38,6 +39,15 @@ export function useMemoryFile(api: Api, path: string | null) {
     setNotice(null);
     load().catch((err: unknown) => setError(errorText(err)));
   }, [load]);
+
+  // 别处改了记忆：草稿没动过就跟着刷新；改了一半的不覆盖，保存时会提示冲突
+  const dirtyRef = useRef(false);
+  dirtyRef.current = saved !== null && draft !== saved.content;
+  const firstVersion = useRef(version);
+  useEffect(() => {
+    if (version === firstVersion.current || dirtyRef.current) return;
+    load().catch(() => {});
+  }, [version, load]);
 
   const run = async (job: () => Promise<void>): Promise<void> => {
     setBusy(true);

@@ -2,7 +2,7 @@
 // 改内容、保存，下面是修改历史，每一条都能撤销。
 
 import { useEffect, useState } from 'react';
-import type { RevisionSource } from '@minibot/core';
+import type { Bot, RevisionSource } from '@minibot/core';
 import { Brain, FileText, FolderOpen, User } from 'lucide-react';
 import type { MemoryIndex } from '../api';
 import { t, type MessageKey } from '../i18n';
@@ -11,7 +11,7 @@ import { useMemoryFile } from '../settings/useMemoryFile';
 import type { PanelContext } from './BotPanel';
 import { Card, ColRow, LinkRow, NavRow, NoteRow, SwitchRow, panelInputCls, primaryButtonCls, rowCls } from './rows';
 
-export function MemoryPage({ api, bot, patch, open }: PanelContext) {
+export function MemoryPage({ api, bot, patch, open, memoryVersion }: PanelContext) {
   const [index, setIndex] = useState<MemoryIndex | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -19,7 +19,7 @@ export function MemoryPage({ api, bot, patch, open }: PanelContext) {
       .listMemory(bot.id)
       .then(setIndex)
       .catch((err: unknown) => setError(errorText(err)));
-  }, [api, bot.id]);
+  }, [api, bot.id, memoryVersion]);
 
   return (
     <>
@@ -46,7 +46,7 @@ export function MemoryPage({ api, bot, patch, open }: PanelContext) {
               key={topic.path}
               icon={FileText}
               title={topic.name}
-              hint={topic.summary ?? undefined}
+              hint={topic.summary ?? <span className="text-ink-tertiary">{t('panel.memory.noSummary')}</span>}
               onClick={() => open({ id: 'memoryFile', name: topic.name, path: topic.path })}
             />
           ))
@@ -72,8 +72,15 @@ const SOURCE: Record<RevisionSource, MessageKey> = {
   external: 'panel.memory.source.external',
 };
 
-export function MemoryFilePage({ api, path }: PanelContext & { path: string }) {
-  const file = useMemoryFile(api, path);
+/** actor：'user' 是你，null 是外部修改（不知道是谁），其余是 bot id */
+function actorLabel(actor: string | null, bot: Bot): string {
+  if (actor === null) return t('panel.memory.actor.unknown');
+  if (actor === 'user') return t('panel.memory.actor.user');
+  return actor === bot.id ? bot.name : actor;
+}
+
+export function MemoryFilePage({ api, bot, path, memoryVersion }: PanelContext & { path: string }) {
+  const file = useMemoryFile(api, path, memoryVersion);
   return (
     <>
       <Card>
@@ -105,7 +112,9 @@ export function MemoryFilePage({ api, path }: PanelContext & { path: string }) {
             <div key={r.id} className={rowCls}>
               <div className="min-w-0 flex-1">
                 <div className="text-[13px] text-ink">{t(SOURCE[r.source])}</div>
-                <div className="text-[12px] text-ink-tertiary">{formatTime(r.createdAt)}</div>
+                <div className="text-[12px] text-ink-tertiary">
+                  {actorLabel(r.actor, bot)} · {formatTime(r.createdAt)}
+                </div>
               </div>
               <button
                 type="button"

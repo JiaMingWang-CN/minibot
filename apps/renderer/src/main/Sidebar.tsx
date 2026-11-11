@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import type { Bot, SearchHit, Thread } from '@minibot/core';
-import { Loader2, MoreHorizontal, Plus, Search, Settings, X } from 'lucide-react';
+import { Loader2, MoreHorizontal, Plus, Search, Settings, ShieldAlert, X } from 'lucide-react';
 import { Logo } from '../brand/Logo';
 import { cn } from '../lib/cn';
 import { t } from '../i18n';
@@ -16,6 +16,7 @@ export function Sidebar({
   threads,
   activeId,
   running,
+  waiting,
   searchOpen,
   query,
   hits,
@@ -31,6 +32,8 @@ export function Sidebar({
   threads: Thread[];
   activeId: string | null;
   running: ReadonlySet<string>;
+  /** 有请求在等批准的对话 */
+  waiting: ReadonlySet<string>;
   searchOpen: boolean;
   query: string;
   hits: SearchHit[] | null;
@@ -116,7 +119,11 @@ export function Sidebar({
                   className="h-full min-w-0 flex-1 truncate text-left text-[14px] outline-none">
                   {thread.title}
                 </button>
-                {running.has(thread.id) && <Loader2 size={14} className="shrink-0 animate-spin text-ink-tertiary" aria-label={t('main.running')} />}
+                {waiting.has(thread.id) ? (
+                  <ShieldAlert size={14} className="shrink-0 text-warning" aria-label={t('approval.waitingThread')} />
+                ) : (
+                  running.has(thread.id) && <Loader2 size={14} className="shrink-0 animate-spin text-ink-tertiary" aria-label={t('main.running')} />
+                )}
                 <Menu
                   align="start"
                   width={160}

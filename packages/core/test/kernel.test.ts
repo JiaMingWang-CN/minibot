@@ -95,6 +95,7 @@ test('onboarding：设定为空时随机生成；工作目录为空时用默认�
   assert.equal(state.onboarded, true);
   assert.equal(state.mainBotId, bot.id);
   assert.equal(state.bots.length, 1);
+  assert.deepEqual(state.defaultWorkspaces, { [bot.id]: workspace });
   await kernel.close();
 });
 

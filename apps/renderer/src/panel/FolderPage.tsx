@@ -6,7 +6,7 @@ import { errorText } from '../ui/settings';
 import type { PanelContext } from './BotPanel';
 import { Card, ColRow, NoteRow, buttonCls, panelInputCls, primaryButtonCls } from './rows';
 
-export function FolderPage({ bot, patch, isRunning }: PanelContext) {
+export function FolderPage({ bot, patch, isRunning, defaultWorkspace }: PanelContext) {
   const [draft, setDraft] = useState(bot.workspace ?? '');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
@@ -34,7 +34,7 @@ export function FolderPage({ bot, patch, isRunning }: PanelContext) {
           <input
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            placeholder={t('panel.folder.placeholder')}
+            placeholder={defaultWorkspace ?? t('panel.folder.placeholder')}
             aria-label={t('panel.page.folder')}
             spellCheck={false}
             className={`${panelInputCls} font-mono`}
@@ -50,6 +50,12 @@ export function FolderPage({ bot, patch, isRunning }: PanelContext) {
             </button>
           </div>
         </ColRow>
+        {defaultWorkspace !== undefined && (
+          <NoteRow>
+            {t('panel.folder.defaultPath')}
+            <span className="font-mono break-all text-ink">{defaultWorkspace}</span>
+          </NoteRow>
+        )}
         {isRunning && <NoteRow>{t('panel.whileRunning')}</NoteRow>}
         {message !== null && <NoteRow tone={message.ok ? 'ok' : 'warn'}>{message.text}</NoteRow>}
       </Card>

@@ -8,7 +8,7 @@ import { BUTTON_PRIMARY, INPUT, SETTINGS_CARD, SettingsGroup, errorText } from '
 import { cn } from '../lib/cn';
 import { useMemoryFile } from './useMemoryFile';
 
-export function GeneralPage({ api, bot }: { api: Api; bot: Bot }) {
+export function GeneralPage({ api, bot, memoryVersion }: { api: Api; bot: Bot; memoryVersion: number }) {
   const [path, setPath] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   useEffect(() => {
@@ -17,7 +17,7 @@ export function GeneralPage({ api, bot }: { api: Api; bot: Bot }) {
       .then((m) => setPath(m.user.path))
       .catch((err: unknown) => setLoadError(errorText(err)));
   }, [api, bot.id]);
-  const file = useMemoryFile(api, path);
+  const file = useMemoryFile(api, path, memoryVersion);
 
   return (
     <SettingsGroup label={t('settings.profile.title')} footnote={t('settings.profile.hint')}>
