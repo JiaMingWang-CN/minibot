@@ -14,6 +14,7 @@ import { AbortedError } from '../src/model/types.ts';
 import type { CallModel } from '../src/model/client.ts';
 import type { Block } from '../src/model/types.ts';
 import { CANCELLED_TEXT } from '../src/db/messages.ts';
+import { estimateChars } from '../src/agent/compaction.ts';
 
 function fakeCrypto(backend = 'os'): KeyCrypto {
   return {
@@ -348,4 +349,35 @@ test('deleteProvider：有 bot 在用时抛 provider_in_use', async () => {
     (err: unknown) => err instanceof KernelError && err.code === 'provider_in_use',
   );
   await kernel.close();
+});
+
+test('contextUsage：无消息时为 0；有基线时为基线 token 加其后消息的估算；线程不存在时报错', async () => {
+  const root = await tmpRoot();
+  const kernel = await Kernel.open({ dataRoot: root, crypto: fakeCrypto(), callModel: echoModel() });
+  const provider = await kernel.addProvider({
+    name: 'P',
+    format: 'chat_completions',
+    baseUrl: 'http://127.0.0.1:1',
+    apiKey: 'sk-ctx-123456',
+  });
+  const bot = await kernel.completeOnboarding({ providerId: provider.id, model: 'm' });
+  await kernel.updateBot(bot.id, { contextWindow: 50_000 });
+  const thread = kernel.createThread(bot.id);
+
+  const empty = await kernel.contextUsage(thread.id);
+  assert.equal(empty.window, 50_000);
+  assert.equal(empty.tokens, 0);
+
+  kernel.sendMessage(thread.id, '你好');
+  await waitFor(() => kernel.listMessages(thread.id).some((m) => m.role === 'assistant'));
+  await kernel.close();
+
+  const reopened = await Kernel.open({ dataRoot: root, crypto: fakeCrypto(), callModel: echoModel() });
+  const usage = await reopened.contextUsage(thread.id);
+  // 基线 = echoModel 上报的 inputTokens 5（对应用户消息）；其后的助手回复按字符估算累加
+  const reply = reopened.listMessages(thread.id).filter((m) => m.role === 'assistant');
+  assert.equal(usage.tokens, 5 + estimateChars(JSON.stringify(reply)));
+  assert.ok(usage.tokens > 5);
+  await assert.rejects(() => reopened.contextUsage('missing'), KernelError);
+  await reopened.close();
 });

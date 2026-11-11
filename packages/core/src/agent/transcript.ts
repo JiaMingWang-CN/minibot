@@ -20,6 +20,8 @@ export function transcriptOf(messages: StoredMessage[]): string {
         lines.push(`【调用工具 ${block.name}】${clip(JSON.stringify(block.input))}`);
       } else if (block.type === 'tool_result') {
         lines.push(`【工具结果 ${block.status}】${clip(block.content)}`);
+      } else if (block.type === 'image') {
+        lines.push('【图片】');
       }
     }
   }

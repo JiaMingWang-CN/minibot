@@ -8,7 +8,15 @@ export interface ApprovalRequest {
   tool: ToolName;
   summary: string;
   createdAt: number;
+  /** run_command 的命令原文 */
+  command?: string;
+  /** 是否可以勾选“总是允许此命令”（只有简单命令可以） */
+  canAlwaysAllow: boolean;
 }
+
+export type ApprovalRequestInput = Omit<ApprovalRequest, 'id' | 'createdAt' | 'canAlwaysAllow'> & {
+  canAlwaysAllow?: boolean;
+};
 
 export type ApprovalEvent =
   | { type: 'approval_request'; request: ApprovalRequest }
@@ -34,10 +42,11 @@ export class ApprovalBroker {
     this.emit = emit;
   }
 
-  request(r: Omit<ApprovalRequest, 'id' | 'createdAt'>, signal: AbortSignal): Promise<ApprovalResult> {
+  request(r: ApprovalRequestInput, signal: AbortSignal): Promise<ApprovalResult> {
     if (signal.aborted) return Promise.resolve('cancelled');
     const request: ApprovalRequest = {
       ...r,
+      canAlwaysAllow: r.canAlwaysAllow ?? false,
       id: randomUUID(),
       createdAt: Date.now(),
     };
@@ -68,6 +77,10 @@ export class ApprovalBroker {
     this.emit({ type: 'approval_resolved', id, result });
     entry.resolve(result);
     return true;
+  }
+
+  get(id: string): ApprovalRequest | undefined {
+    return this.pendingEntries.get(id)?.request;
   }
 
   pending(): ApprovalRequest[] {

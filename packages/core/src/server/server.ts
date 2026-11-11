@@ -87,7 +87,9 @@ export async function startServer(kernel: Kernel, o: ServerOptions): Promise<Ser
       res.writeHead(200, {
         'content-type': MIME[path.extname(resolved).toLowerCase()] ?? 'application/octet-stream',
         'content-length': String(content.length),
-        'content-security-policy': `default-src 'self'; connect-src 'self' ws://127.0.0.1:${port}`,
+        // 脚本只允许本机来源；样式要放开内联：Astryx 运行时往 <head> 插 <style>（弹出层定位、代码高亮），不支持 nonce。
+        // 图片附件需带令牌读取，界面把它转成 blob: 地址显示。
+        'content-security-policy': `default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob:; connect-src 'self' ws://127.0.0.1:${port}`,
         'x-content-type-options': 'nosniff',
       });
       res.end(content);
@@ -183,7 +185,7 @@ export async function startServer(kernel: Kernel, o: ServerOptions): Promise<Ser
         typeof msg['id'] === 'string' &&
         typeof msg['approve'] === 'boolean'
       ) {
-        kernel.respondApproval(msg['id'], msg['approve']);
+        kernel.respondApproval(msg['id'], msg['approve'], msg['always'] === true);
       }
     });
 

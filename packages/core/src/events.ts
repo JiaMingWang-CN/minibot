@@ -7,4 +7,9 @@ export type KernelEvent =
   | { type: 'turn'; threadId: string; state: 'running' | 'idle' }
   | { type: 'approval_request'; request: ApprovalRequest }
   | { type: 'approval_resolved'; id: string; result: string }
-  | { type: 'memory_changed'; path: string };
+  | { type: 'memory_changed'; path: string }
+  /** 模型调用失败后自动重试：第 attempt 次重试将在 delayMs 后开始 */
+  | { type: 'retry'; threadId: string; attempt: number; delayMs: number; message: string }
+  /** 线程中 id >= fromId 的消息已删除（手动重试） */
+  | { type: 'messages_deleted'; threadId: string; fromId: number }
+  | { type: 'thread_deleted'; threadId: string };

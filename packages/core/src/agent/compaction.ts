@@ -1,7 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { Bot, Provider } from '../config/types.ts';
 import type { CallModel } from '../model/client.ts';
-import type { Block, StoredMessage } from '../model/types.ts';
+import type { Block, StoredMessage, Usage } from '../model/types.ts';
 import { appendMessage, getMessage, messagesFrom } from '../db/messages.ts';
 import { getThread, updateThread } from '../db/threads.ts';
 import type { KernelEvent } from '../events.ts';
@@ -31,9 +31,18 @@ export function estimateTokens(
   if (baseline !== undefined && messages.some((m) => m.id === baseline.upToMsgId)) {
     const index = messages.findIndex((m) => m.id === baseline.upToMsgId);
     const after = messages.slice(index + 1);
-    return baseline.inputTokens + estimateChars(JSON.stringify(after));
+    return baseline.inputTokens + estimateChars(JSON.stringify(after)) + imageTokens(after);
   }
-  return estimateChars(`${system}${JSON.stringify(messages)}`);
+  return estimateChars(`${system}${JSON.stringify(messages)}`) + imageTokens(messages);
+}
+
+/** 图片在消息里只存引用，按每张固定 token 数估算 */
+export const IMAGE_TOKENS = 1600;
+
+function imageTokens(messages: StoredMessage[]): number {
+  let count = 0;
+  for (const m of messages) for (const b of m.blocks) if (b.type === 'image') count += 1;
+  return count * IMAGE_TOKENS;
 }
 
 export function contextFor(db: DatabaseSync, threadId: string): StoredMessage[] {
@@ -133,6 +142,7 @@ export async function compactThread(
   const toSummarize = combined.slice(0, boundaryIndex).filter((m) => m.kind !== 'notice');
   if (toSummarize.length === 0) return;
   let summaryText = '';
+  let summaryUsage: Usage | undefined;
   {
     const info = deps.resolveModel(bot);
     const result = await deps.callModel({
@@ -154,6 +164,7 @@ export async function compactThread(
       .map((b) => b.text)
       .join('\n');
     summaryText = deps.secrets === undefined ? text : deps.secrets.redact(text);
+    summaryUsage = result.usage;
   }
   if (summaryText.length === 0) summaryText = '（没有可压缩的对话）';
 
@@ -163,6 +174,8 @@ export async function compactThread(
     blocks: [{ type: 'text', text: `${SUMMARY_PREFIX}\n${summaryText}` }],
     kind: 'summary',
     interrupted: false,
+    // 摘要调用也计入线程用量
+    ...(summaryUsage !== undefined && summaryUsage.inputTokens > 0 ? { usage: summaryUsage } : {}),
   });
   deps.emit({ type: 'message', threadId, message });
 

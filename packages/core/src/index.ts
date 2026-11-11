@@ -14,6 +14,7 @@ export {
   type OpenOptions,
   type OnboardingInput,
   type AddProviderInput,
+  type ImageInput,
 } from './kernel.ts';
 export type { KernelEvent } from './events.ts';
 export { listPresets } from './config/presets.ts';
@@ -23,7 +24,9 @@ export {
   type ServerHandle,
   type ServerOptions,
 } from './server/server.ts';
-export type { StoredMessage, Block, AssistantResult, Delta } from './model/types.ts';
+export type { StoredMessage, Block, AssistantResult, Delta, Usage, ImageMediaType } from './model/types.ts';
+export type { ThreadUsage, SearchHit } from './db/messages.ts';
+export type { ApprovalLogEntry } from './db/approval-log.ts';
 export type { Thread } from './db/threads.ts';
 export type {
   Bot,
@@ -33,6 +36,7 @@ export type {
   AppConfig,
   ApiFormat,
   ThinkingLevel,
+  ApprovalMode,
 } from './config/types.ts';
 export type { ApprovalRequest } from './approval/broker.ts';
 export type { Revision, RevisionSource } from './memory/revisions.ts';

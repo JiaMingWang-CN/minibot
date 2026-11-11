@@ -2,10 +2,20 @@
   "brand": "minibot",
   "tagline": "你自己掌控的本机 AI 助理",
   "brief": "一个完全由自己掌控的桌面 AI 助理底座：多个有人设的 bot 像联系人一样排列，在本机动手干活，危险操作先问你，有长期记忆，不依赖账号和云服务。",
-  "adjectives": ["小巧", "友好", "可控", "本机"],
-  "criteria": "避开星芒、大脑、天线机器人等 AI 套路；16px 可辨；单色与反白可用；和界面紫色一致。",
-  "mockups": ["readme", "sticker", "social", "tshirt"],
-  "brand_color": "#7c3aed",
+  "adjectives": [
+    "小巧",
+    "友好",
+    "可控",
+    "本机"
+  ],
+  "criteria": "避开星芒、大脑、天线机器人等 AI 套路；16px 可辨；单色与反白可用；黑头白眼，不依赖彩色。",
+  "mockups": [
+    "readme",
+    "sticker",
+    "social",
+    "tshirt"
+  ],
+  "brand_color": "#1c1917",
   "greyscale": false,
   "designer": "minibot",
   "round": 2,
@@ -19,9 +29,20 @@
         "圆角头部与圆眼传达小巧、友好",
         "光标下划线暗示它在本机执行命令",
         "定制几何文字标，与符号同一套圆+直切语言"
-      ]
+      ],
+      "stacked": "minibot-stacked.svg",
+      "symbol_on_tile": "minibot-symbol-reversed.svg",
+      "symbol_on_dark": "minibot-symbol-reversed.svg",
+      "lockup_on_tile": "minibot-horizontal-reversed.svg",
+      "lockup_on_dark": "minibot-horizontal-reversed.svg",
+      "stacked_on_tile": "minibot-stacked-reversed.svg",
+      "stacked_on_dark": "minibot-stacked-reversed.svg"
     }
   ],
   "recommendation": "眨眼 bot：最适合做应用图标和 favicon，眨眼可延展为动效（思考中/等待批准）。",
-  "next_steps": ["确认颜色与文字标", "接入桌面端图标与界面", "商标检索"]
+  "next_steps": [
+    "确认颜色与文字标",
+    "接入桌面端图标与界面",
+    "商标检索"
+  ]
 }

@@ -1,4 +1,4 @@
-import { historyForModel, keepReasoning, type Adapter, type ModelRequest } from './adapter.ts';
+import { MISSING_IMAGE_TEXT, historyForModel, keepReasoning, type Adapter, type ModelRequest } from './adapter.ts';
 import type { ResultAccumulator } from './accumulator.ts';
 import { ModelError } from './types.ts';
 import type { SseEvent } from './sse.ts';
@@ -23,12 +23,17 @@ interface AnthropicPayload {
     partial_json?: string;
     stop_reason?: string | null;
   };
-  message?: {
-    usage?: { input_tokens?: number; output_tokens?: number };
-  };
-  usage?: { input_tokens?: number; output_tokens?: number };
+  message?: { usage?: AnthropicUsage };
+  usage?: AnthropicUsage;
   error?: { message?: string; type?: string };
   [key: string]: unknown;
+}
+
+interface AnthropicUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_input_tokens?: number | null;
+  cache_creation_input_tokens?: number | null;
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -61,6 +66,13 @@ function anthropicBody(req: ModelRequest): Record<string, unknown> {
       for (const block of message.blocks) {
         if (block.type === 'text' && block.text.length > 0) {
           content.push({ type: 'text', text: block.text });
+        } else if (block.type === 'image') {
+          const data = req.attachments?.[block.id];
+          content.push(
+            data === undefined
+              ? { type: 'text', text: MISSING_IMAGE_TEXT }
+              : { type: 'image', source: { type: 'base64', media_type: block.mediaType, data } },
+          );
         }
       }
       push('user', content);
@@ -112,13 +124,16 @@ function stopReasonOf(reason: string | null | undefined): 'end' | 'tool_use' | '
   return 'end';
 }
 
-function setUsage(
-  acc: ResultAccumulator,
-  usage: { input_tokens?: number; output_tokens?: number } | undefined,
-): void {
+// Anthropic 的 input_tokens 不含缓存部分：总输入 = input + cache_read + cache_creation
+function setUsage(acc: ResultAccumulator, usage: AnthropicUsage | undefined): void {
   if (usage === undefined) return;
-  const u: { inputTokens?: number; outputTokens?: number } = {};
-  if (typeof usage.input_tokens === 'number') u.inputTokens = usage.input_tokens;
+  const u: { inputTokens?: number; outputTokens?: number; cachedInputTokens?: number } = {};
+  if (typeof usage.input_tokens === 'number') {
+    const read = usage.cache_read_input_tokens ?? 0;
+    const creation = usage.cache_creation_input_tokens ?? 0;
+    u.inputTokens = usage.input_tokens + read + creation;
+    if (typeof usage.cache_read_input_tokens === 'number') u.cachedInputTokens = usage.cache_read_input_tokens;
+  }
   if (typeof usage.output_tokens === 'number') u.outputTokens = usage.output_tokens;
   acc.usage(u);
 }

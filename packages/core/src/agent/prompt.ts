@@ -12,18 +12,20 @@ export interface SystemPromptArgs {
 }
 
 export function buildSystemPrompt(a: SystemPromptArgs): string {
-  const topicLines =
-    a.topics.length === 0
-      ? '（暂无主题）'
-      : a.topics.map((t) => `- ${t.name}：${t.summary ?? '无简介'}`).join('\n');
-  return `${a.bot.persona}
+  const head = `${a.bot.persona}
 
 当前工作目录：${a.workspace}
 当前平台：${a.platform}
 当前时间：${a.now.toISOString()}
 
 用户画像（${a.userMdPath}）：
-${a.userMd.length > 0 ? a.userMd : '（暂无）'}
+${a.userMd.length > 0 ? a.userMd : '（暂无）'}`;
+  if (!a.bot.memoryEnabled) return head;
+  const topicLines =
+    a.topics.length === 0
+      ? '（暂无主题）'
+      : a.topics.map((t) => `- ${t.name}：${t.summary ?? '无简介'}`).join('\n');
+  return `${head}
 
 记忆主题（${a.memoryDir}）：
 ${topicLines}

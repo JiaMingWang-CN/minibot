@@ -89,3 +89,7 @@ export function updateThread(db: DatabaseSync, id: string, patch: ThreadPatch): 
   values.push(id);
   db.prepare(`UPDATE threads SET ${sets.join(', ')} WHERE id = ?`).run(...values);
 }
+
+export function deleteThreadRow(db: DatabaseSync, id: string): void {
+  db.prepare('DELETE FROM threads WHERE id = ?').run(id);
+}

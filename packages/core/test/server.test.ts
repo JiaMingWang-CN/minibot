@@ -184,7 +184,7 @@ test('静态文件：/ 与 /assets/* 不需要令牌，带 CSP', async () => {
     assert.match(index.headers['content-type'] as string, /text\/html/);
     assert.equal(
       index.headers['content-security-policy'],
-      `default-src 'self'; connect-src 'self' ws://127.0.0.1:${h.server.port}`,
+      `default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob:; connect-src 'self' ws://127.0.0.1:${h.server.port}`,
     );
     const css = await request(h.server, { path: '/assets/style.css', auth: false });
     assert.equal(css.status, 200);
@@ -275,6 +275,56 @@ test('KernelError conflict → 409', async () => {
     });
     assert.equal(res.status, 409);
     assert.equal(JSON.parse(res.text).error.code, 'conflict');
+  } finally {
+    await h.close();
+  }
+});
+
+test('新接口：发消息（含图片）、用量、搜索、改名、重试、附件、审批日志、删除线程', async () => {
+  const h = await setup();
+  const png =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+  const json = (method: string, p: string, body?: unknown) =>
+    request(h.server, {
+      path: p,
+      method,
+      headers: { 'content-type': 'application/json' },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    });
+  try {
+    const sent = await json('POST', `/api/threads/${h.threadId}/messages`, {
+      text: '看看这张咖啡馆的图',
+      images: [{ mediaType: 'image/png', data: png }],
+    });
+    assert.equal(sent.status, 200);
+    assert.deepEqual(JSON.parse(sent.text), { ok: true, mode: 'turn' });
+    const started = Date.now();
+    while (JSON.parse((await json('GET', `/api/threads/${h.threadId}/usage`)).text).calls < 1) {
+      if (Date.now() - started > 5000) throw new Error('等待超时');
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    const usage = JSON.parse((await json('GET', `/api/threads/${h.threadId}/usage`)).text);
+    assert.deepEqual(usage, { calls: 1, inputTokens: 3, outputTokens: 1, cachedInputTokens: null });
+
+    const hits = JSON.parse((await json('GET', `/api/search?q=${encodeURIComponent('咖啡馆')}`)).text);
+    assert.equal(hits.length, 1);
+    assert.equal((await json('GET', '/api/search?q=')).status, 400);
+
+    const renamed = await json('PATCH', `/api/threads/${h.threadId}`, { title: '看图' });
+    assert.equal(JSON.parse(renamed.text).title, '看图');
+
+    const messages = JSON.parse((await json('GET', `/api/threads/${h.threadId}/messages`)).text);
+    const image = messages[0].blocks.find((b: { type: string }) => b.type === 'image');
+    const file = await request(h.server, { path: `/api/attachments/${image.id}` });
+    assert.equal(file.status, 200);
+    assert.equal(file.headers['content-type'], 'image/png');
+    assert.equal((await request(h.server, { path: '/api/attachments/not-a-uuid' })).status, 400);
+
+    assert.equal((await json('POST', `/api/threads/${h.threadId}/retry`)).status, 200);
+    assert.equal(JSON.parse((await json('GET', '/api/approvals/log')).text).length, 0);
+
+    assert.equal((await json('DELETE', `/api/threads/${h.threadId}`)).status, 200);
+    assert.equal((await json('DELETE', `/api/threads/${h.threadId}`)).status, 404);
   } finally {
     await h.close();
   }

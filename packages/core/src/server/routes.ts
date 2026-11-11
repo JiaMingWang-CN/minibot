@@ -1,10 +1,12 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { URL } from 'node:url';
 import { Kernel, KernelError } from '../kernel.ts';
-import type { AddProviderInput, OnboardingInput } from '../kernel.ts';
+import type { AddProviderInput, ImageInput, OnboardingInput } from '../kernel.ts';
 import { knownModels } from '../config/presets.ts';
 
 const MAX_BODY_BYTES = 1024 * 1024;
+/** 发消息接口可能带最多 4 张 5MB 的图片（base64 后约 6.7MB 每张） */
+const MAX_MESSAGE_BODY_BYTES = 32 * 1024 * 1024;
 
 class HttpError extends Error {
   status: number;
@@ -31,20 +33,20 @@ function errorStatus(code: KernelError['code']): number {
   return 500;
 }
 
-async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+async function readJsonBody(req: IncomingMessage, maxBytes = MAX_BODY_BYTES): Promise<unknown> {
   let size = 0;
   let tooLarge = false;
   const chunks: Buffer[] = [];
   for await (const chunk of req) {
     const buffer = chunk as Buffer;
     size += buffer.length;
-    if (size > MAX_BODY_BYTES) {
+    if (size > maxBytes) {
       tooLarge = true;
     } else {
       chunks.push(buffer);
     }
   }
-  if (tooLarge) throw new HttpError(413, 'payload_too_large', '请求体超过 1MB');
+  if (tooLarge) throw new HttpError(413, 'payload_too_large', `请求体超过 ${Math.round(maxBytes / 1024 / 1024)}MB`);
   const text = Buffer.concat(chunks).toString('utf8');
   if (text.length === 0) throw new KernelError('invalid', '请求体为空');
   try {
@@ -118,6 +120,35 @@ async function route(
   }
   if (method === 'GET' && pathname === '/api/approvals') {
     sendJson(res, 200, kernel.pendingApprovals());
+    return;
+  }
+  if (method === 'GET' && pathname === '/api/approvals/log') {
+    const botId = url.searchParams.get('botId');
+    const before = optionalNumber(url.searchParams.get('before'));
+    const limit = optionalNumber(url.searchParams.get('limit'));
+    sendJson(
+      res,
+      200,
+      kernel.approvalLog({
+        ...(botId !== null ? { botId } : {}),
+        ...(before !== undefined ? { before } : {}),
+        ...(limit !== undefined ? { limit } : {}),
+      }),
+    );
+    return;
+  }
+  if (method === 'GET' && pathname === '/api/search') {
+    const q = url.searchParams.get('q') ?? '';
+    const botId = url.searchParams.get('botId');
+    const limit = optionalNumber(url.searchParams.get('limit'));
+    sendJson(
+      res,
+      200,
+      kernel.search(q, {
+        ...(botId !== null ? { botId } : {}),
+        ...(limit !== undefined ? { limit } : {}),
+      }),
+    );
     return;
   }
   if (method === 'GET' && pathname === '/api/settings') {
@@ -219,12 +250,61 @@ async function route(
       return;
     }
     if (method === 'POST') {
-      const body = objectBody(await readJsonBody(req));
+      const body = objectBody(await readJsonBody(req, MAX_MESSAGE_BODY_BYTES));
       const text = stringField(body, 'text');
-      kernel.sendMessage(id, text);
+      const images = body['images'] ?? [];
+      if (!Array.isArray(images)) throw new KernelError('invalid', 'images 必须是数组');
+      const mode = kernel.sendMessage(id, text, images as ImageInput[]);
+      sendJson(res, 200, { ok: true, mode });
+      return;
+    }
+  }
+
+  match = /^\/api\/threads\/([^/]+)$/.exec(pathname);
+  if (match !== null) {
+    const id = decodeURIComponent(match[1]!);
+    if (method === 'PATCH') {
+      const body = objectBody(await readJsonBody(req));
+      sendJson(res, 200, kernel.renameThread(id, stringField(body, 'title')));
+      return;
+    }
+    if (method === 'DELETE') {
+      await kernel.deleteThread(id);
       sendJson(res, 200, { ok: true });
       return;
     }
+  }
+
+  match = /^\/api\/threads\/([^/]+)\/retry$/.exec(pathname);
+  if (match !== null && method === 'POST') {
+    kernel.retry(decodeURIComponent(match[1]!));
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  match = /^\/api\/threads\/([^/]+)\/usage$/.exec(pathname);
+  if (match !== null && method === 'GET') {
+    sendJson(res, 200, kernel.threadUsage(decodeURIComponent(match[1]!)));
+    return;
+  }
+
+  match = /^\/api\/attachments\/([^/]+)$/.exec(pathname);
+  if (match !== null && method === 'GET') {
+    const file = await kernel.readAttachment(decodeURIComponent(match[1]!));
+    res.writeHead(200, {
+      'content-type': file.mediaType,
+      'content-length': String(file.data.length),
+      'cache-control': 'private, max-age=31536000, immutable',
+    });
+    res.end(file.data);
+    return;
+  }
+
+  match = /^\/api\/threads\/([^/]+)\/context$/.exec(pathname);
+  if (match !== null && method === 'GET') {
+    const id = decodeURIComponent(match[1]!);
+    sendJson(res, 200, await kernel.contextUsage(id));
+    return;
   }
 
   match = /^\/api\/threads\/([^/]+)\/compact$/.exec(pathname);

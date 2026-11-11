@@ -1,4 +1,12 @@
-import { historyForModel, keepReasoning, textOf, type Adapter, type ModelRequest } from './adapter.ts';
+import {
+  MISSING_IMAGE_TEXT,
+  historyForModel,
+  imagesOf,
+  keepReasoning,
+  textOf,
+  type Adapter,
+  type ModelRequest,
+} from './adapter.ts';
 import type { ResultAccumulator } from './accumulator.ts';
 import { ModelError } from './types.ts';
 import type { Block } from './types.ts';
@@ -19,7 +27,11 @@ interface ResponsesPayload {
   item?: ResponsesItem;
   response?: {
     status?: string;
-    usage?: { input_tokens?: number; output_tokens?: number };
+    usage?: {
+      input_tokens?: number;
+      output_tokens?: number;
+      input_tokens_details?: { cached_tokens?: number } | null;
+    };
     error?: { message?: string; code?: string };
     incomplete_details?: { reason?: string };
   };
@@ -40,9 +52,17 @@ function responsesBody(req: ModelRequest): Record<string, unknown> {
         }
       }
       const text = textOf(message.blocks);
-      if (text.length > 0) {
-        input.push({ role: 'user', content: [{ type: 'input_text', text }] });
+      const content: Record<string, unknown>[] = [];
+      if (text.length > 0) content.push({ type: 'input_text', text });
+      for (const image of imagesOf(message.blocks)) {
+        const data = req.attachments?.[image.id];
+        content.push(
+          data === undefined
+            ? { type: 'input_text', text: MISSING_IMAGE_TEXT }
+            : { type: 'input_image', image_url: `data:${image.mediaType};base64,${data}` },
+        );
       }
+      if (content.length > 0) input.push({ role: 'user', content });
     } else {
       for (const block of message.blocks) {
         if (block.type === 'reasoning') {
@@ -135,9 +155,11 @@ async function responsesParse(
     } else if (type === 'response.completed') {
       const usage = payload.response?.usage;
       if (usage !== undefined) {
+        const cached = usage.input_tokens_details?.cached_tokens;
         acc.usage({
           inputTokens: usage.input_tokens ?? 0,
           outputTokens: usage.output_tokens ?? 0,
+          ...(typeof cached === 'number' ? { cachedInputTokens: cached } : {}),
         });
       }
       acc.stop(hasToolCall ? 'tool_use' : 'end');

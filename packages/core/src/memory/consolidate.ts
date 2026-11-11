@@ -138,6 +138,7 @@ export class Consolidator {
     const now = (this.deps.now ?? Date.now)();
     const bots = await listBots(this.deps.paths);
     for (const bot of bots) {
+      if (!bot.memoryEnabled) continue;
       for (const thread of listThreads(this.deps.db, bot.id)) {
         const latest = latestMessageId(this.deps.db, thread.id);
         if (latest === null) continue;
@@ -163,6 +164,7 @@ export class Consolidator {
     const thread = getThread(this.deps.db, threadId);
     if (thread === null) return;
     const bot = await this.deps.loadBot(thread.botId);
+    if (!bot.memoryEnabled) return;
     const incremental = messagesFrom(this.deps.db, threadId, thread.lastExtractedMsgId + 1);
     if (incremental.length === 0) return;
     const latestId = incremental[incremental.length - 1]!.id;

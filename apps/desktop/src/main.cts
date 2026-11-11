@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain } = require('electron') as typeof import('electron');
+const { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell } = require('electron') as typeof import('electron');
 const path = require('node:path') as typeof import('node:path');
 const { URL } = require('node:url') as typeof import('node:url');
 
@@ -8,11 +8,13 @@ const cryptoModule = require('./crypto.cjs') as {
   electronCrypto: () => import('@minibot/core').KeyCrypto;
 };
 
-// Title bar follows the page: dark while the startup animation plays, light afterwards.
-const TITLE_BAR = {
-  dark: { color: '#1c1917', symbolColor: '#e7e5e4', height: 32 },
-  light: { color: '#f5f5f4', symbolColor: '#1c1917', height: 32 },
+// 标题栏覆盖层的颜色由页面按主题 token 传入；页面加载前先用与主题背景一致的初始色，避免闪白或闪黑。
+const TITLE_BAR_HEIGHT = 28;
+const INITIAL_TITLE_BAR = {
+  dark: { color: '#0b0b0b', symbolColor: '#f5f5f5' },
+  light: { color: '#f5f5f5', symbolColor: '#1c1c1c' },
 } as const;
+const HEX_COLOR = /^#[0-9a-f]{6}$/i;
 
 type ServerHandle = Awaited<ReturnType<typeof startServer>>;
 
@@ -29,36 +31,54 @@ async function bootstrap(): Promise<void> {
   kernel = await Kernel.open({ dataRoot, crypto: cryptoModule.electronCrypto() });
   server = await startServer(kernel, { staticDir });
 
-  ipcMain.handle('minibot:connection', (event) => {
+  // 只接受本应用主窗口、且页面来自本机服务的调用
+  const assertTrusted = (event: import('electron').IpcMainInvokeEvent): void => {
     if (mainWindow === undefined || event.sender.id !== mainWindow.webContents.id) {
-      throw new Error('拒绝连接请求');
+      throw new Error('拒绝请求');
     }
     const frame = event.senderFrame;
-    if (frame === null) throw new Error('拒绝连接请求');
+    if (frame === null) throw new Error('拒绝请求');
     let origin = '';
     try {
       origin = new URL(frame.url).origin;
     } catch {
-      throw new Error('拒绝连接请求');
+      throw new Error('拒绝请求');
     }
-    if (server === undefined || origin !== server.origin) throw new Error('拒绝连接请求');
-    return { port: server.port, token: server.token };
+    if (server === undefined || origin !== server.origin) throw new Error('拒绝请求');
+  };
+
+  ipcMain.handle('minibot:connection', (event) => {
+    assertTrusted(event);
+    return { port: server!.port, token: server!.token };
   });
 
-  ipcMain.on('minibot:title-bar', (event, theme: unknown) => {
-    if (mainWindow === undefined || event.sender.id !== mainWindow.webContents.id) return;
-    if (theme !== 'dark' && theme !== 'light') return;
-    mainWindow.setTitleBarOverlay(TITLE_BAR[theme]);
+  // 只按 botId 打开该 bot 的记忆目录，不接受任意路径（openPath 打开可执行文件会直接运行它）
+  ipcMain.handle('minibot:open-memory-dir', async (event, botId: unknown) => {
+    assertTrusted(event);
+    if (kernel === undefined || typeof botId !== 'string') throw new Error('拒绝请求');
+    const error = await shell.openPath(kernel.memoryDir(botId));
+    if (error.length > 0) throw new Error(error);
   });
+
+  ipcMain.on('minibot:title-bar', (event, colors: unknown) => {
+    if (mainWindow === undefined || event.sender.id !== mainWindow.webContents.id) return;
+    const { color, symbolColor } = (colors ?? {}) as { color?: unknown; symbolColor?: unknown };
+    if (typeof color !== 'string' || typeof symbolColor !== 'string') return;
+    if (!HEX_COLOR.test(color) || !HEX_COLOR.test(symbolColor)) return;
+    mainWindow.setTitleBarOverlay({ color, symbolColor, height: TITLE_BAR_HEIGHT });
+    mainWindow.setBackgroundColor(color);
+  });
+
+  const initial = INITIAL_TITLE_BAR[nativeTheme.shouldUseDarkColors ? 'dark' : 'light'];
 
   mainWindow = new BrowserWindow({
     width: 1100,
     height: 760,
     title: 'minibot',
     icon: path.join(staticDir, 'assets', 'icon.png'),
-    backgroundColor: TITLE_BAR.dark.color,
+    backgroundColor: initial.color,
     titleBarStyle: 'hidden',
-    titleBarOverlay: TITLE_BAR.dark,
+    titleBarOverlay: { ...initial, height: TITLE_BAR_HEIGHT },
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,

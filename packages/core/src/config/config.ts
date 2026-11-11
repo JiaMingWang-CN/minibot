@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import { atomicWriteFile } from '../fs/atomic-write.ts';
 import type { DataPaths } from '../paths.ts';
 import type { AppConfig, Bot, Provider } from './types.ts';
-import { THINKING_LEVELS } from './types.ts';
+import { APPROVAL_MODES, THINKING_LEVELS } from './types.ts';
 
 import personasData from './default-personas.json' with { type: 'json' };
 
@@ -27,6 +27,8 @@ export function newBot(id: string, providerId = '', model = ''): Bot {
     workspace: null,
     approvalMode: 'ask',
     thinkingLevel: null,
+    allowedCommands: [],
+    memoryEnabled: true,
   };
 }
 
@@ -155,10 +157,16 @@ export function migrate(raw: unknown): AppConfig | Bot {
       contextWindow,
       maxOutputTokens,
       workspace: workspace === null || workspace.length === 0 ? null : workspace,
-      approvalMode: raw['approvalMode'] === 'auto' ? 'auto' : 'ask',
+      approvalMode: (APPROVAL_MODES as readonly unknown[]).includes(raw['approvalMode'])
+        ? (raw['approvalMode'] as Bot['approvalMode'])
+        : 'ask',
       thinkingLevel: isThinkingLevel(raw['thinkingLevel'])
         ? (raw['thinkingLevel'] as Bot['thinkingLevel'])
         : null,
+      allowedCommands: Array.isArray(raw['allowedCommands'])
+        ? raw['allowedCommands'].filter((c): c is string => typeof c === 'string')
+        : [],
+      memoryEnabled: raw['memoryEnabled'] !== false,
     };
   }
   throw new Error('无法识别的配置结构');

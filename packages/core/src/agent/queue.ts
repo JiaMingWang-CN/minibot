@@ -49,6 +49,25 @@ export class ThreadQueue {
     this.lanes.get(threadId)?.current?.abort();
   }
 
+  /** 中止该线程正在运行的与排队中的全部任务 */
+  abortThread(threadId: string): void {
+    const lane = this.lanes.get(threadId);
+    if (lane === undefined) return;
+    for (const controller of lane.controllers) controller.abort();
+    lane.current?.abort();
+  }
+
+  /** 等该线程已排队的任务全部结束 */
+  async whenIdle(threadId: string): Promise<void> {
+    for (;;) {
+      const lane = this.lanes.get(threadId);
+      if (lane === undefined) return;
+      const tail = lane.tail;
+      await tail;
+      if (this.lanes.get(threadId) !== lane || lane.tail === tail) return;
+    }
+  }
+
   isRunning(threadId: string): boolean {
     return this.lanes.get(threadId)?.running === true;
   }

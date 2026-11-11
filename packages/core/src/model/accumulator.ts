@@ -82,6 +82,7 @@ export class ResultAccumulator {
   usage(u: Partial<AssistantResult['usage']>): void {
     if (u.inputTokens !== undefined) this.usageValue.inputTokens = u.inputTokens;
     if (u.outputTokens !== undefined) this.usageValue.outputTokens = u.outputTokens;
+    if (u.cachedInputTokens !== undefined) this.usageValue.cachedInputTokens = u.cachedInputTokens;
   }
 
   snapshot(): Block[] {

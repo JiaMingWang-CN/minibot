@@ -1,4 +1,12 @@
-import { historyForModel, keepReasoning, textOf, type Adapter, type ModelRequest } from './adapter.ts';
+import {
+  MISSING_IMAGE_TEXT,
+  historyForModel,
+  imagesOf,
+  keepReasoning,
+  textOf,
+  type Adapter,
+  type ModelRequest,
+} from './adapter.ts';
 import type { ResultAccumulator } from './accumulator.ts';
 import type { Block } from './types.ts';
 import type { SseEvent } from './sse.ts';
@@ -21,7 +29,13 @@ interface ChatChoice {
 
 interface ChatChunk {
   choices?: ChatChoice[];
-  usage?: { prompt_tokens?: number; completion_tokens?: number } | null;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    prompt_tokens_details?: { cached_tokens?: number } | null;
+    /** DeepSeek */
+    prompt_cache_hit_tokens?: number;
+  } | null;
 }
 
 function stopReasonOf(finish: string): 'end' | 'tool_use' | 'max_tokens' {
@@ -40,7 +54,22 @@ function chatBody(req: ModelRequest): Record<string, unknown> {
         }
       }
       const text = textOf(message.blocks);
-      if (text.length > 0) messages.push({ role: 'user', content: text });
+      const images = imagesOf(message.blocks);
+      if (images.length > 0) {
+        const content: Record<string, unknown>[] = [];
+        if (text.length > 0) content.push({ type: 'text', text });
+        for (const image of images) {
+          const data = req.attachments?.[image.id];
+          content.push(
+            data === undefined
+              ? { type: 'text', text: MISSING_IMAGE_TEXT }
+              : { type: 'image_url', image_url: { url: `data:${image.mediaType};base64,${data}` } },
+          );
+        }
+        messages.push({ role: 'user', content });
+      } else if (text.length > 0) {
+        messages.push({ role: 'user', content: text });
+      }
     } else {
       const text = textOf(message.blocks);
       const toolCalls = message.blocks
@@ -96,9 +125,11 @@ async function chatParse(
     if (ev.data.length === 0) continue;
     const chunk = JSON.parse(ev.data) as ChatChunk;
     if (chunk.usage !== undefined && chunk.usage !== null) {
+      const cached = chunk.usage.prompt_tokens_details?.cached_tokens ?? chunk.usage.prompt_cache_hit_tokens;
       acc.usage({
         inputTokens: chunk.usage.prompt_tokens ?? 0,
         outputTokens: chunk.usage.completion_tokens ?? 0,
+        ...(typeof cached === 'number' ? { cachedInputTokens: cached } : {}),
       });
     }
     for (const choice of chunk.choices ?? []) {

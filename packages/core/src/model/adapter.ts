@@ -16,6 +16,14 @@ export interface ModelRequest {
   tools: ToolSpec[];
   maxTokens: number;
   thinkingLevel: ThinkingLevel | null;
+  /** 图片附件 id → base64 数据；消息里的 image 块按 id 取用，取不到时发文字占位 */
+  attachments?: Record<string, string>;
+}
+
+export const MISSING_IMAGE_TEXT = '[图片已丢失]';
+
+export function imagesOf(blocks: Block[]): Extract<Block, { type: 'image' }>[] {
+  return blocks.filter((b): b is Extract<Block, { type: 'image' }> => b.type === 'image');
 }
 
 export interface Adapter {

@@ -13,7 +13,18 @@ export type Block =
       toolUseId: string;
       content: string;
       status: 'ok' | 'error' | 'denied' | 'cancelled';
-    };
+    }
+  /** 用户附带的图片；数据存在附件目录，消息里只存引用 */
+  | { type: 'image'; id: string; mediaType: ImageMediaType };
+
+export type ImageMediaType = 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
+
+/** 一次模型调用的用量；cachedInputTokens 只在供应商报告了缓存命中时才有（不报告不等于 0） */
+export interface Usage {
+  inputTokens: number;
+  outputTokens: number;
+  cachedInputTokens?: number;
+}
 
 export type MessageKind = 'summary' | 'notice' | null;
 
@@ -25,6 +36,8 @@ export interface StoredMessage {
   kind: MessageKind;
   interrupted: boolean;
   createdAt: number;
+  /** 产生这条 assistant 消息的模型调用用量 */
+  usage?: Usage;
 }
 
 export type Delta = { type: 'text' | 'reasoning'; text: string };
@@ -32,7 +45,7 @@ export type Delta = { type: 'text' | 'reasoning'; text: string };
 export interface AssistantResult {
   blocks: Block[];
   stopReason: 'end' | 'tool_use' | 'max_tokens';
-  usage: { inputTokens: number; outputTokens: number };
+  usage: Usage;
 }
 
 export type ModelErrorKind =

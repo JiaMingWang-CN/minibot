@@ -2,5 +2,6 @@ const { contextBridge, ipcRenderer } = require('electron') as typeof import('ele
 
 contextBridge.exposeInMainWorld('minibot', {
   connection: () => ipcRenderer.invoke('minibot:connection'),
-  setTitleBar: (theme: 'dark' | 'light') => ipcRenderer.send('minibot:title-bar', theme),
+  setTitleBar: (colors: { color: string; symbolColor: string }) => ipcRenderer.send('minibot:title-bar', colors),
+  openMemoryDir: (botId: string) => ipcRenderer.invoke('minibot:open-memory-dir', botId),
 });

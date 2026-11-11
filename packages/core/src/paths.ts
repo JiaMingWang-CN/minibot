@@ -8,6 +8,7 @@ export interface DataPaths {
   userMd: string;
   db: string;
   outputs: string;
+  attachments: string;
   botsDir: string;
   botDir(id: string): string;
   botJson(id: string): string;
@@ -27,6 +28,7 @@ export function dataPaths(root: string): DataPaths {
     userMd: path.join(root, 'user.md'),
     db: path.join(root, 'minibot.db'),
     outputs: path.join(root, 'outputs'),
+    attachments: path.join(root, 'attachments'),
     botsDir: path.join(root, 'bots'),
     botDir: (id) => path.join(root, 'bots', id),
     botJson: (id) => path.join(root, 'bots', id, 'bot.json'),

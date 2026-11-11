@@ -1,22 +1,26 @@
 import sys, os
 OUT = sys.argv[1]
-INK, VIO = "#1c1917", "#7c3aed"
+INK, EYE = "#1c1917", "#ffffff"
 f = lambda v: f"{v:g}"
 
 # ---------- symbol ----------
-def symbol(eye_r=20, bar=(142,128,46,18), cx_eye=98, cy_eye=126):
-    # head: 184x144 rounded rect, r=52; holes: round eye + cursor-bar eye (closed-eye wink)
+HEAD = "M88 56h80a52 52 0 0 1 52 52v40a52 52 0 0 1-52 52H88a52 52 0 0 1-52-52v-40a52 52 0 0 1 52-52Z"
+def eyes(eye_r=20, bar=(142,128,46,18), cx_eye=98, cy_eye=126):
+    # round eye + cursor-bar eye (closed-eye wink)
     x,y,w,h = bar
-    head = "M88 56h80a52 52 0 0 1 52 52v40a52 52 0 0 1-52 52H88a52 52 0 0 1-52-52v-40a52 52 0 0 1 52-52Z"
     eye = f"M{f(cx_eye)} {f(cy_eye-eye_r)}a{f(eye_r)} {f(eye_r)} 0 1 0 0 {f(2*eye_r)}a{f(eye_r)} {f(eye_r)} 0 1 0 0 {f(-2*eye_r)}Z"
     b = f"M{f(x)} {f(y)}h{f(w)}v{f(h)}h{f(-w)}Z"
-    return head + eye + b
+    return eye + b
+def symbol(**kw):
+    # head: 184x144 rounded rect, r=52; eyes cut out as holes (one-colour versions)
+    return HEAD + eyes(**kw)
 
 SYM      = symbol()
 # small-size cut: bigger eye + thicker, slightly longer bar, bottoms aligned
 SYM_SM   = symbol(eye_r=24, bar=(140,126,52,24), cx_eye=96, cy_eye=126)
 # reversed (white on dark): irradiation makes holes look smaller -> open them a touch
 SYM_REV  = symbol(eye_r=21, bar=(141,127,48,20))
+EYES, EYES_SM = eyes(), eyes(eye_r=24, bar=(140,126,52,24), cx_eye=96, cy_eye=126)
 
 def svg(vb, body, title="minibot logo"):
     return f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{vb}"><title>{title}</title>{body}</svg>\n'
@@ -53,15 +57,20 @@ WM, WMW = wordmark()
 def wm_group(tx, ty, s, fill):
     return f'<path transform="translate({f(tx)} {f(ty)}) scale({f(s)})" fill="{fill}" d="{WM}"/>'
 def sym_group(tx, ty, s, fill, d=SYM):
-    return f'<path transform="translate({f(tx)} {f(ty)}) scale({f(s)})" fill-rule="evenodd" fill="{fill}" d="{d}"/>'
+    t = f'transform="translate({f(tx)} {f(ty)}) scale({f(s)})"'
+    if fill == "color":   # black head, white eyes
+        return f'<path {t} fill="{INK}" d="{HEAD}"/><path {t} fill="{EYE}" d="{EYES}"/>'
+    return f'<path {t} fill-rule="evenodd" fill="{fill}" d="{d}"/>'
+def color_symbol(eyes_d):
+    return f'<path fill="{INK}" d="{HEAD}"/><path fill="{EYE}" d="{eyes_d}"/>'
 
 def write(name, text):
     open(os.path.join(OUT, name), "w", encoding="utf-8").write(text)
 
 # symbol files
-write("minibot-symbol.svg",        svg("0 0 256 256", p(SYM, VIO)))
+write("minibot-symbol.svg",        svg("0 0 256 256", color_symbol(EYES)))
 write("minibot-symbol-black.svg",  svg("0 0 256 256", p(SYM, "#000")))
-write("minibot-symbol-small.svg",  svg("0 0 256 256", p(SYM_SM, VIO)))
+write("minibot-symbol-small.svg",  svg("0 0 256 256", color_symbol(EYES_SM)))
 write("minibot-symbol-reversed.svg", svg("0 0 256 256", p(SYM_REV, "#fff")))
 write("minibot-wordmark.svg", svg(f"-4 {-ASC-4} {f(WMW+8)} {ASC+8}", f'<path fill="{INK}" d="{WM}"/>'))
 
@@ -73,7 +82,7 @@ def horizontal(sym_fill, wm_fill, d=SYM):
     body = sym_group(-36*s + 0, top - 56*s, s, sym_fill, d) + wm_group(head_w + gap, base, 1, wm_fill)
     W = head_w + gap + WMW
     return svg(f"-24 0 {f(W+48)} {H}", body)
-write("minibot-horizontal.svg",          horizontal(VIO, INK))
+write("minibot-horizontal.svg",          horizontal("color", INK))
 write("minibot-horizontal-black.svg",    horizontal("#000", "#000"))
 write("minibot-horizontal-reversed.svg", horizontal("#fff", "#fff", SYM_REV))
 
@@ -85,6 +94,6 @@ def stacked(sym_fill, wm_fill, d=SYM):
     base = head_top + 144 + gap + ASC*s_wm
     body = sym_group(cx-128, head_top-56, 1, sym_fill, d) + wm_group(cx - wm_w/2, base, s_wm, wm_fill)
     return svg(f"0 0 {f(W)} {f(base+24)}", body)
-write("minibot-stacked.svg", stacked(VIO, INK))
+write("minibot-stacked.svg", stacked("color", INK))
 write("minibot-stacked-reversed.svg", stacked("#fff", "#fff", SYM_REV))
 print("wordmark width", WMW)

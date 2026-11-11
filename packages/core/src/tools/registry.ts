@@ -1,8 +1,8 @@
 import { promises as fs } from 'node:fs';
 import type { Bot } from '../config/types.ts';
 import type { DataPaths } from '../paths.ts';
-import type { ApprovalBroker } from '../approval/broker.ts';
-import { decide, type ToolName } from '../approval/policy.ts';
+import type { ApprovalBroker, ApprovalRequestInput } from '../approval/broker.ts';
+import { decide, isSimpleCommand, type ToolName } from '../approval/policy.ts';
 import { CANCELLED_TEXT } from '../db/messages.ts';
 import type { MemoryRevisions } from '../memory/revisions.ts';
 import type { SecretSet } from '../secrets/redact.ts';
@@ -108,6 +108,10 @@ export interface ToolEnv {
   signal: AbortSignal;
   /** run_command 子进程的环境变量；不给则继承内核进程的环境 */
   childEnv?: NodeJS.ProcessEnv;
+  /** 命令是否在“总是允许”名单里；内核读最新的 bot 配置，不给时用 bot.allowedCommands */
+  isCommandAllowed?: (command: string) => Promise<boolean>;
+  /** 命中“总是允许”名单而跳过审批时调用，用于决策日志 */
+  onAllowlisted?: (request: ApprovalRequestInput) => void;
 }
 
 async function realOrSelf(p: string): Promise<string> {
@@ -230,17 +234,26 @@ export async function executeTool(
 
     const toolName = call.name as ToolName;
     if (decide(env.bot.approvalMode, toolName, classes) === 'ask') {
-      const approval = await env.broker.request(
-        {
-          botId: env.bot.id,
-          threadId: env.threadId,
-          tool: toolName,
-          summary: summarize(call.name, input, real),
-        },
-        env.signal,
-      );
-      if (approval === 'denied') return fail('用户拒绝了此操作', 'denied');
-      if (approval === 'cancelled') return fail(CANCELLED_TEXT, 'cancelled');
+      const command = call.name === 'run_command' ? (input['command'] as string) : undefined;
+      const simple = command !== undefined && isSimpleCommand(command);
+      const request = {
+        botId: env.bot.id,
+        threadId: env.threadId,
+        tool: toolName,
+        summary: summarize(call.name, input, real),
+        ...(command !== undefined ? { command } : {}),
+      };
+      const allowlisted =
+        simple &&
+        command !== undefined &&
+        (await (env.isCommandAllowed?.(command) ?? env.bot.allowedCommands.includes(command)));
+      if (allowlisted) {
+        env.onAllowlisted?.(request);
+      } else {
+        const approval = await env.broker.request({ ...request, canAlwaysAllow: simple }, env.signal);
+        if (approval === 'denied') return fail('用户拒绝了此操作', 'denied');
+        if (approval === 'cancelled') return fail(CANCELLED_TEXT, 'cancelled');
+      }
     }
 
     let output: ToolOutput;
