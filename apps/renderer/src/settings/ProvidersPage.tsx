@@ -1,14 +1,15 @@
 // 模型服务：每个供应商一张可展开的卡片（标题、地址、连接状态），展开后改名称、地址、Key，测试连接或删除。
 // 布局照 OpenMausBot 的“连接”页。
 
-import { useId, useState } from 'react';
+import { useCallback, useId, useState } from 'react';
 import type { Bot, KernelState, TestConnectionResult } from '@minibot/core';
 import { ChevronRight, Eye, EyeOff, Plus } from 'lucide-react';
 import type { Api, PresetWithModels } from '../api';
 import { cn } from '../lib/cn';
 import { t, type MessageKey } from '../i18n';
 import { ALL_LEVELS } from '../lib/models';
-import { ModelsEditor, fromDrafts, toDrafts, type ModelDraft } from './ModelsEditor';
+import { ModelsEditor, fromDrafts, initialDrafts, type ModelDraft } from './ModelsEditor';
+import { Toast } from '../ui/Toast';
 import { BUTTON, BUTTON_DANGER, BUTTON_PRIMARY, Field, INPUT, SETTINGS_CARD, SelectField, errorText } from '../ui/settings';
 
 type ProviderInfo = KernelState['providers'][number];
@@ -86,10 +87,11 @@ function ProviderCard({
   const [replacing, setReplacing] = useState(isNew || provider.hasKey !== true);
   const [useEnv, setUseEnv] = useState(provider?.apiKeyEnv !== undefined || !canPersistKeys);
   const [apiKeyEnv, setApiKeyEnv] = useState(provider?.apiKeyEnv ?? '');
-  const defaultModel = provider !== null && provider.id === bot.providerId ? bot.model : (preset?.models[0]?.id ?? '');
-  const [testModel, setTestModel] = useState(defaultModel);
-  const [drafts, setDrafts] = useState<ModelDraft[]>(() => toDrafts(provider?.models));
+  const [drafts, setDrafts] = useState<ModelDraft[]>(() => initialDrafts(provider, preset));
   const [busy, setBusy] = useState<'saving' | 'testing' | 'deleting' | null>(null);
+  const [toast, setToast] = useState<{ key: number; text: string } | null>(null);
+  const closeToast = useCallback(() => setToast(null), []);
+  const [testingId, setTestingId] = useState<string | null>(null);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const bodyId = useId();
 
@@ -99,7 +101,7 @@ function ProviderCard({
     if (next === undefined) return;
     setName(next.name);
     setBaseUrl(next.baseUrl);
-    setTestModel(next.models[0]?.id ?? '');
+    setDrafts(initialDrafts(null, next));
   };
 
   const run = async (kind: 'saving' | 'testing' | 'deleting', job: () => Promise<void>): Promise<void> => {
@@ -121,11 +123,15 @@ function ProviderCard({
     run('saving', async () => {
       if (baseUrl.trim() === '') throw new Error(t('onboarding.error.baseUrl'));
       const models = fromDrafts(drafts);
-      if (isNew) {
-        if (preset === undefined) throw new Error(t('settings.providers.pickPreset'));
-        await api.addProvider({ name: name.trim() || preset.name, format: preset.format, baseUrl: baseUrl.trim(), presetId: preset.id, ...(models.length > 0 ? { models } : {}), ...keyFields() });
-      } else {
-        await api.updateProvider(provider.id, { name: name.trim() || provider.name, baseUrl: baseUrl.trim(), models, ...keyFields() });
+      if (isNew && preset === undefined) throw new Error(t('settings.providers.pickPreset'));
+      try {
+        if (isNew) {
+          await api.addProvider({ name: name.trim() || preset!.name, format: preset!.format, baseUrl: baseUrl.trim(), presetId: preset!.id, models, ...keyFields() });
+        } else {
+          await api.updateProvider(provider.id, { name: name.trim() || provider.name, baseUrl: baseUrl.trim(), models, ...keyFields() });
+        }
+      } catch (err) {
+        throw new Error(t('settings.providers.saveFailed', { message: errorText(err) }));
       }
       setApiKey('');
       if (!isNew) setReplacing(false);
@@ -133,12 +139,17 @@ function ProviderCard({
       await onDone();
     });
 
-  const test = (): Promise<void> =>
+  const test = (model: string): Promise<void> =>
     run('testing', async () => {
       if (provider === null) return;
-      if (testModel.trim() === '') throw new Error(t('onboarding.error.model'));
-      const result = await api.testProvider(provider.id, testModel.trim());
-      setMessage(result.ok ? { ok: true, text: t('onboarding.model.testOk') } : { ok: false, text: t(TEST_MESSAGE[result.kind], { message: result.message }) });
+      setTestingId(model);
+      try {
+        const result = await api.testProvider(provider.id, model);
+        if (result.ok) setToast({ key: Date.now(), text: t('onboarding.model.testOk') });
+        else setMessage({ ok: false, text: t(TEST_MESSAGE[result.kind], { message: result.message }) });
+      } finally {
+        setTestingId(null);
+      }
     });
 
   const remove = (): Promise<void> =>
@@ -221,18 +232,10 @@ function ProviderCard({
           onChange={setDrafts}
           levels={(preset?.format ?? provider?.format) === 'anthropic_messages' ? ALL_LEVELS.filter((l) => l !== 'none' && l !== 'minimal') : ALL_LEVELS}
           defaultContextWindow={preset?.contextWindow ?? 128_000}
+          {...(isNew ? {} : { onTest: (model: string) => void test(model) })}
+          testingId={testingId}
+          disabled={busy !== null}
         />
-
-        {!isNew && (
-          <Field label={t('settings.providers.testModel')}>
-            <span className="flex items-center gap-2">
-              <input value={testModel} onChange={(e) => setTestModel(e.target.value)} spellCheck={false} className={cn(INPUT, 'font-mono')} />
-              <button type="button" className={BUTTON} disabled={busy !== null} onClick={() => void test()}>
-                {busy === 'testing' ? t('common.checking') : t('onboarding.model.test')}
-              </button>
-            </span>
-          </Field>
-        )}
 
         {message !== null && (
           <p role={message.ok ? 'status' : 'alert'} className={cn('text-[12px] leading-4', message.ok ? 'text-success' : 'text-danger')}>
@@ -256,6 +259,7 @@ function ProviderCard({
           </button>
         </div>
       </div>
+      <Toast toast={toast} onClose={closeToast} />
     </section>
   );
 }
