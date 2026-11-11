@@ -11,12 +11,18 @@ export interface SystemPromptArgs {
   now: Date;
 }
 
+// 只精确到天：系统提示在请求最前面，时间戳每变一次，各家的前缀缓存就整体失效
+function localDate(d: Date): string {
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 export function buildSystemPrompt(a: SystemPromptArgs): string {
   const head = `${a.bot.persona}
 
 当前工作目录：${a.workspace}
 当前平台：${a.platform}
-当前时间：${a.now.toISOString()}
+当前日期：${localDate(a.now)}
 
 用户画像（${a.userMdPath}）：
 ${a.userMd.length > 0 ? a.userMd : '（暂无）'}`;

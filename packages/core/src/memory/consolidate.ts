@@ -124,7 +124,9 @@ export class Consolidator {
   start(): void {
     if (this.timer !== undefined) return;
     this.timer = setInterval(() => {
-      void this.scan();
+      this.scan().catch((err: unknown) => {
+        console.warn('后台整理扫描失败', err);
+      });
     }, SCAN_INTERVAL_MS);
     this.timer.unref?.();
   }
@@ -280,8 +282,10 @@ export class Consolidator {
 }
 
 function latestMessageId(db: DatabaseSync, threadId: string): number | null {
-  const messages = messagesFrom(db, threadId, 0);
-  return messages.length === 0 ? null : messages[messages.length - 1]!.id;
+  const row = db.prepare('SELECT MAX(id) AS id FROM messages WHERE thread_id = ?').get(threadId) as
+    | { id: number | null }
+    | undefined;
+  return row?.id ?? null;
 }
 
 async function readText(file: string): Promise<string> {

@@ -96,10 +96,18 @@ function anthropicBody(req: ModelRequest): Record<string, unknown> {
     }
   }
 
+  // 提示缓存：断点放在系统提示（覆盖在它之前的工具定义）和最后一条消息的最后一个块上，
+  // 工具调用的每一轮都能命中上一轮写入的前缀
+  const cacheControl = { type: 'ephemeral' };
+  // thinking 块不能直接带 cache_control，往前找最近一个可以带的块
+  const lastContent = messages[messages.length - 1]?.content ?? [];
+  const lastBlock = lastContent.findLast((b) => b['type'] !== 'thinking' && b['type'] !== 'redacted_thinking');
+  if (lastBlock !== undefined) lastBlock['cache_control'] = cacheControl;
+
   const body: Record<string, unknown> = {
     model: req.model,
     max_tokens: req.maxTokens,
-    system: req.system,
+    system: [{ type: 'text', text: req.system, cache_control: cacheControl }],
     messages,
     stream: true,
   };
@@ -143,10 +151,12 @@ async function anthropicParse(
   acc: ResultAccumulator,
   model: string,
 ): Promise<void> {
+  let finished = false;
   for await (const ev of events) {
     if (ev.data.length === 0 || ev.data === '[DONE]') continue;
     const payload = JSON.parse(ev.data) as AnthropicPayload;
     const type = payload.type ?? ev.event ?? '';
+    if (type === 'message_stop') finished = true;
     if (type === 'message_start') {
       setUsage(acc, payload.message?.usage);
     } else if (type === 'content_block_start') {
@@ -178,11 +188,14 @@ async function anthropicParse(
     } else if (type === 'message_delta') {
       setUsage(acc, payload.usage);
       acc.stop(stopReasonOf(payload.delta?.stop_reason));
+      finished = true;
     } else if (type === 'error') {
       const message = payload.error?.message ?? '模型流式响应失败';
       throw new ModelError('stream', message, { partial: acc.snapshot() });
     }
   }
+  // 连接断开而没有收到结束事件：半截回复不能当作完整回复
+  if (!finished) throw new ModelError('stream', '响应中途中断', { partial: acc.snapshot() });
 }
 
 export const anthropicAdapter: Adapter = {

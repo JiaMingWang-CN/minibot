@@ -15,6 +15,7 @@ import {
   listBots,
   randomPersona,
   parseCustomModels,
+  DEFAULT_MAX_OUTPUT_TOKENS,
 } from './config/config.ts';
 import { allowedThinkingLevels, defaultContextWindow, listPresets } from './config/presets.ts';
 import { atomicWriteFile } from './fs/atomic-write.ts';
@@ -389,7 +390,9 @@ export class Kernel {
     id: string,
     patch: Partial<Omit<Provider, 'id'>> & { apiKey?: string },
   ): Promise<Provider> {
-    const provider = this.providerOrThrow(id);
+    const current = this.providerOrThrow(id);
+    // 先在副本上校验并修改，全部通过后才替换；中途失败不会留下改了一半的内存状态
+    const provider: Provider = { ...current };
     if (patch.name !== undefined) {
       if (patch.name.trim().length === 0) throw new KernelError('invalid', '供应商名称不能为空');
       provider.name = patch.name;
@@ -408,10 +411,11 @@ export class Kernel {
       if (typeof patch.baseUrl !== 'string') throw new KernelError('invalid', 'baseUrl 必须是字符串');
       provider.baseUrl = patch.baseUrl;
     }
+    // 空字符串表示清除环境变量，改回使用保存的 Key
     if (patch.apiKeyEnv !== undefined) {
-      if (patch.apiKeyEnv.length === 0) throw new KernelError('invalid', '环境变量名不能为空');
-      provider.apiKeyEnv = patch.apiKeyEnv;
-      this.secretStore.registerEnv([patch.apiKeyEnv]);
+      if (typeof patch.apiKeyEnv !== 'string') throw new KernelError('invalid', '环境变量名必须是字符串');
+      if (patch.apiKeyEnv.length === 0) delete provider.apiKeyEnv;
+      else provider.apiKeyEnv = patch.apiKeyEnv;
     }
     if (patch.presetId !== undefined) {
       if (!listPresets().some((p) => p.id === patch.presetId)) {
@@ -420,12 +424,13 @@ export class Kernel {
       provider.presetId = patch.presetId;
     }
     if (patch.models !== undefined) provider.models = checkedModels(patch.models);
-    if (patch.apiKey !== undefined && patch.apiKey.length > 0) {
-      if (!this.secretStore.canPersist()) {
-        throw new KernelError('key_not_persistable', '当前系统没有可用的密钥库，无法保存 API Key');
-      }
-      await this.secretStore.set(provider.id, patch.apiKey);
+    const newKey = patch.apiKey !== undefined && patch.apiKey.length > 0 ? patch.apiKey : undefined;
+    if (newKey !== undefined && !this.secretStore.canPersist()) {
+      throw new KernelError('key_not_persistable', '当前系统没有可用的密钥库，无法保存 API Key');
     }
+    if (newKey !== undefined) await this.secretStore.set(provider.id, newKey);
+    if (provider.apiKeyEnv !== undefined) this.secretStore.registerEnv([provider.apiKeyEnv]);
+    this.config.providers[this.config.providers.indexOf(current)] = provider;
     await saveConfig(this.paths, this.config);
     return { ...provider };
   }
@@ -475,7 +480,8 @@ export class Kernel {
       providerId: provider.id,
       model: i.model,
       contextWindow: i.contextWindow ?? defaultContextWindow(provider, i.model),
-      maxOutputTokens: 128_000,
+      maxOutputTokens:
+        provider.models?.find((m) => m.id === i.model)?.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
       workspace: i.workspace !== undefined && i.workspace.trim().length > 0 ? i.workspace.trim() : null,
       approvalMode: 'ask',
       thinkingLevel: null,

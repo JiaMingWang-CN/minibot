@@ -231,6 +231,26 @@ test('Linux basic_text：addProvider 带 apiKey → KernelError key_not_persista
   }
 });
 
+test('updateProvider：apiKeyEnv 传空串清除；校验失败时不留下半截修改', async () => {
+  const root = await tmpRoot();
+  const kernel = await Kernel.open({ dataRoot: root, crypto: fakeCrypto('keychain'), callModel: echoModel() });
+  const provider = await kernel.addProvider({
+    name: 'P',
+    format: 'chat_completions',
+    baseUrl: 'http://x',
+    apiKeyEnv: 'MINIBOT_TEST_NOT_SET_ENV',
+  });
+  assert.equal((await kernel.updateProvider(provider.id, { apiKeyEnv: '' })).apiKeyEnv, undefined);
+  assert.equal((await kernel.state()).providers[0]!.apiKeyEnv, undefined);
+
+  await assert.rejects(
+    kernel.updateProvider(provider.id, { name: '新名字', presetId: 'no-such-preset' }),
+    (err: unknown) => err instanceof KernelError && err.code === 'invalid',
+  );
+  assert.equal((await kernel.state()).providers[0]!.name, 'P');
+  await kernel.close();
+});
+
 test('界面写记忆：baseHash 过期 → conflict；成功时记 manual_ui / user 修订', async () => {
   const root = await tmpRoot();
   const kernel = await Kernel.open({ dataRoot: root, crypto: fakeCrypto(), callModel: echoModel() });

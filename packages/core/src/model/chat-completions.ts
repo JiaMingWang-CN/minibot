@@ -8,7 +8,7 @@ import {
   type ModelRequest,
 } from './adapter.ts';
 import type { ResultAccumulator } from './accumulator.ts';
-import type { Block } from './types.ts';
+import { ModelError, type Block } from './types.ts';
 import type { SseEvent } from './sse.ts';
 
 interface ChatToolCallDelta {
@@ -119,9 +119,25 @@ function chatBody(req: ModelRequest): Record<string, unknown> {
 async function chatParse(
   events: AsyncIterable<SseEvent>,
   acc: ResultAccumulator,
+  model: string,
 ): Promise<void> {
+  let reasoningContent = '';
+  let finished = false;
+  // 思考模式下的工具调用轮次，DeepSeek 要求把 reasoning_content 原样回传；记在 opaque 里供 chatBody 取用
+  const keepReasoningContent = (): void => {
+    if (reasoningContent.length > 0) {
+      acc.reasoningOpaque({
+        format: 'chat_completions',
+        model,
+        data: { reasoning_content: reasoningContent },
+      });
+    }
+  };
   for await (const ev of events) {
-    if (ev.data === '[DONE]') return;
+    if (ev.data === '[DONE]') {
+      keepReasoningContent();
+      return;
+    }
     if (ev.data.length === 0) continue;
     const chunk = JSON.parse(ev.data) as ChatChunk;
     if (chunk.usage !== undefined && chunk.usage !== null) {
@@ -135,7 +151,10 @@ async function chatParse(
     for (const choice of chunk.choices ?? []) {
       const delta = choice.delta;
       if (delta !== undefined) {
-        if (typeof delta.reasoning_content === 'string') acc.reasoning(delta.reasoning_content);
+        if (typeof delta.reasoning_content === 'string') {
+          reasoningContent += delta.reasoning_content;
+          acc.reasoning(delta.reasoning_content);
+        }
         if (typeof delta.content === 'string') acc.text(delta.content);
         for (const call of delta.tool_calls ?? []) {
           const key = String(call.index ?? 0);
@@ -149,9 +168,13 @@ async function chatParse(
       }
       if (typeof choice.finish_reason === 'string' && choice.finish_reason.length > 0) {
         acc.stop(stopReasonOf(choice.finish_reason));
+        finished = true;
       }
     }
   }
+  keepReasoningContent();
+  // 连接断开而没有收到结束标记：半截回复不能当作完整回复
+  if (!finished) throw new ModelError('stream', '响应中途中断', { partial: acc.snapshot() });
 }
 
 export const chatCompletionsAdapter: Adapter = {

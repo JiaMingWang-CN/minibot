@@ -17,6 +17,15 @@ test('写入内容且不残留临时文件', async () => {
   assert.deepEqual(await fs.readdir(dir), ['a.txt']);
 });
 
+test('覆盖已有文件时保留权限位（可执行脚本不会变成不可执行）', { skip: process.platform === 'win32' }, async () => {
+  const dir = await tmpDir();
+  const target = path.join(dir, 'run.sh');
+  await fs.writeFile(target, '#!/bin/sh\n', { mode: 0o755 });
+  await fs.chmod(target, 0o755);
+  await atomicWriteFile(target, '#!/bin/sh\necho hi\n');
+  assert.equal((await fs.stat(target)).mode & 0o777, 0o755);
+});
+
 test('rename 两次 EPERM 后成功', async () => {
   const dir = await tmpDir();
   const target = path.join(dir, 'b.txt');

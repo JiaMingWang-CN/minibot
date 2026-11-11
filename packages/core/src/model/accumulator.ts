@@ -96,8 +96,10 @@ export class ResultAccumulator {
           if (part.opaque !== undefined) block.opaque = part.opaque;
           blocks.push(block);
         }
-      } else if (part.input !== undefined) {
-        blocks.push({ type: 'tool_use', id: part.id, name: part.name, input: part.input });
+      } else {
+        // 无参数的工具调用没有任何参数增量，按空对象处理而不是丢掉
+        const input = part.input ?? (part.args.trim().length === 0 ? {} : undefined);
+        if (input !== undefined) blocks.push({ type: 'tool_use', id: part.id, name: part.name, input });
       }
     }
     return structuredClone(blocks);

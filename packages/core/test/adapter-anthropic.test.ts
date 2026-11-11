@@ -87,15 +87,18 @@ test('请求体：system 字段、max_tokens、input_schema、tool_result.is_err
     ],
     { maxTokens: 128000 },
   );
-  assert.equal(b['system'], 'SYS');
+  assert.deepEqual(b['system'], [{ type: 'text', text: 'SYS', cache_control: { type: 'ephemeral' } }]);
   assert.equal(b['max_tokens'], 128000);
   const messages = b['messages'] as { role: string; content: Record<string, unknown>[] }[];
+  // 缓存断点只放在最后一条消息的最后一个块上
   assert.deepEqual(messages[2]!.content[0], {
     type: 'tool_result',
     tool_use_id: 'tu_A',
     content: '拒绝',
     is_error: true,
+    cache_control: { type: 'ephemeral' },
   });
+  assert.equal('cache_control' in messages[0]!.content[0]!, false);
   assert.ok((b['tools'] as Record<string, unknown>[])[0]!['input_schema']);
 });
 
@@ -106,7 +109,7 @@ test('相邻的同角色消息合并', () => {
       role: 'user',
       content: [
         { type: 'text', text: 'a' },
-        { type: 'text', text: 'b' },
+        { type: 'text', text: 'b', cache_control: { type: 'ephemeral' } },
       ],
     },
   ]);

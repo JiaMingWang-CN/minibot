@@ -138,6 +138,26 @@ test('解析：文本、reasoning_content、分片的 tool_calls、usage、[DONE
   assert.deepEqual(result.usage, { inputTokens: 12, outputTokens: 5 });
 });
 
+test('解析：reasoning_content 记入 opaque，下一轮能原样回传', async () => {
+  const result = await runFixture('chat-tools.sse');
+  const reasoning = result.blocks[0] as Extract<Block, { type: 'reasoning' }>;
+  assert.equal(reasoning.opaque?.format, 'chat_completions');
+  assert.equal(reasoning.opaque?.model, 'm');
+  const b = bodyOf([user('hi'), assistant(result.blocks)]);
+  const sent = (b['messages'] as Record<string, unknown>[])[2]!;
+  assert.equal(sent['reasoning_content'], reasoning.text);
+});
+
+test('解析：没有结束标记就断开 → 抛 stream 错误并带上已收到的内容', async () => {
+  const acc = new ResultAccumulator(() => {});
+  const cut = 'data: {"choices":[{"delta":{"content":"半截"}}]}\n\n';
+  await assert.rejects(
+    chatCompletionsAdapter.parse(parseSse(chunks([cut])), acc, 'm'),
+    (err: unknown) => (err as { kind?: string }).kind === 'stream',
+  );
+  assert.deepEqual(acc.result().blocks, [{ type: 'text', text: '半截' }]);
+});
+
 test('finish_reason length → max_tokens', async () => {
   const result = await runFixture('chat-length.sse');
   assert.equal(result.stopReason, 'max_tokens');

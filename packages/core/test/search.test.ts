@@ -32,6 +32,20 @@ test('glob 用 * 列目录', async () => {
   assert.ok(lines.includes('src'));
 });
 
+test('glob 的模式不能用 ../ 或绝对路径越出搜索根目录', async () => {
+  const outer = await tmpRoot();
+  const dir = path.join(outer, 'ws');
+  await fs.mkdir(dir);
+  await fs.writeFile(path.join(outer, 'secret.txt'), 's');
+  await fs.writeFile(path.join(dir, 'a.txt'), 'a');
+  const up = await globFiles(dir, { pattern: '../*' });
+  assert.equal(up.content, '没有匹配的文件');
+  const abs = await globFiles(dir, { pattern: `${outer.split(path.sep).join('/')}/*` });
+  assert.equal(abs.content, '没有匹配的文件');
+  const braces = await globFiles(dir, { pattern: '{..,.}/*' });
+  assert.deepEqual(braces.content.split('\n'), ['a.txt']);
+});
+
 test('glob 超过 500 个截断并注明', async () => {
   const dir = await tmpRoot();
   for (let i = 0; i < 520; i += 1) {

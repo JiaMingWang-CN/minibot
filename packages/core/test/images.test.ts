@@ -70,7 +70,11 @@ test('图片：Anthropic 用 base64 image source', () => {
   };
   assert.deepEqual(body.messages[0]!.content, [
     { type: 'text', text: '看图' },
-    { type: 'image', source: { type: 'base64', media_type: 'image/png', data: PNG } },
+    {
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/png', data: PNG },
+      cache_control: { type: 'ephemeral' },
+    },
   ]);
 });
 

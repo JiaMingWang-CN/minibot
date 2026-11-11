@@ -26,10 +26,16 @@ export async function atomicWriteFile(
   const dir = path.dirname(target);
   await fs.mkdir(dir, { recursive: true });
   const tmp = path.join(dir, `${path.basename(target)}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`);
+  // 改名会换掉文件本身：目标已存在时沿用它的权限位（可执行位等），否则新文件会丢掉
+  const mode = await fs.stat(target).then(
+    (s) => s.mode & 0o7777,
+    () => undefined,
+  );
   try {
     const fh = await fs.open(tmp, 'w');
     try {
       await fh.writeFile(data);
+      if (mode !== undefined && process.platform !== 'win32') await fh.chmod(mode);
       await fh.sync();
     } finally {
       await fh.close();

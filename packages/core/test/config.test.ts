@@ -7,6 +7,8 @@ import { dataPaths } from '../src/paths.ts';
 import type { Provider } from '../src/config/types.ts';
 import {
   loadConfig,
+  listBots,
+  saveBot,
   newBot,
   effectiveWorkspace,
   migrate,
@@ -32,10 +34,24 @@ test('缺省配置', async () => {
   });
 });
 
+test('listBots 跳过没有 bot.json 或已损坏的目录', async () => {
+  const root = await tmpRoot();
+  const p = dataPaths(root);
+  await saveBot(p, newBot('good'));
+  await fs.mkdir(path.join(p.botsDir, 'empty'), { recursive: true });
+  await fs.mkdir(path.join(p.botsDir, 'broken'), { recursive: true });
+  await fs.writeFile(p.botJson('broken'), '{ not json');
+  const bots = await listBots(p);
+  assert.deepEqual(
+    bots.map((b) => b.id),
+    ['good'],
+  );
+});
+
 test('bot 默认值', () => {
   const b = newBot('b1');
   assert.equal(b.contextWindow, 128000);
-  assert.equal(b.maxOutputTokens, 128000);
+  assert.equal(b.maxOutputTokens, 32000);
   assert.equal(b.approvalMode, 'ask');
   assert.equal(b.thinkingLevel, null);
 });

@@ -14,6 +14,9 @@ export function defaultConfig(): AppConfig {
   return { schemaVersion: 1, providers: [], mainBotId: null, consolidationModel: null };
 }
 
+/** 新 bot 的默认输出上限：Anthropic 格式必须带 max_tokens，128000 超过不少模型的允许值，首次对话就会 400 */
+export const DEFAULT_MAX_OUTPUT_TOKENS = 32_000;
+
 export function newBot(id: string, providerId = '', model = ''): Bot {
   return {
     schemaVersion: 1,
@@ -23,7 +26,7 @@ export function newBot(id: string, providerId = '', model = ''): Bot {
     providerId,
     model,
     contextWindow: 128_000,
-    maxOutputTokens: 128_000,
+    maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
     workspace: null,
     approvalMode: 'ask',
     thinkingLevel: null,
@@ -78,8 +81,12 @@ export async function listBots(p: DataPaths): Promise<Bot[]> {
     .sort();
   const bots: Bot[] = [];
   for (const id of ids) {
-    const bot = await loadBot(p, id);
-    bots.push(bot);
+    try {
+      bots.push(await loadBot(p, id));
+    } catch (err) {
+      // 初始化中途失败留下的空目录或损坏的 bot.json 不能让整个应用打不开
+      console.warn(`跳过无法读取的 bot：${id}`, err);
+    }
   }
   return bots;
 }
@@ -187,7 +194,7 @@ export function migrate(raw: unknown): AppConfig | Bot {
     const maxOutputTokens =
       typeof raw['maxOutputTokens'] === 'number' && raw['maxOutputTokens'] > 0
         ? raw['maxOutputTokens']
-        : 128_000;
+        : DEFAULT_MAX_OUTPUT_TOKENS;
     const workspace = asString(raw['workspace']);
     return {
       schemaVersion: 1,

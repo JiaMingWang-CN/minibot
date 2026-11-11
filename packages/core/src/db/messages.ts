@@ -186,7 +186,15 @@ export function searchMessages(
 }
 
 export function repairDanglingToolUses(db: DatabaseSync): number {
-  const threadRows = db.prepare('SELECT id FROM threads').all();
+  // 只可能悬空在线程末尾：只扫最后一条消息带 tool_use / tool_result 的线程，不全量解析所有历史
+  const threadRows = db
+    .prepare(
+      `SELECT m.thread_id AS id
+       FROM messages m
+       JOIN (SELECT thread_id, MAX(id) AS last_id FROM messages GROUP BY thread_id) x ON m.id = x.last_id
+       WHERE m.blocks LIKE '%"type":"tool_use"%' OR m.blocks LIKE '%"type":"tool_result"%'`,
+    )
+    .all();
   let repaired = 0;
   for (const threadRow of threadRows) {
     const threadId = (threadRow as Record<string, unknown>)['id'] as string;

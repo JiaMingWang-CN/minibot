@@ -116,8 +116,16 @@ function ProviderCard({
     }
   };
 
+  // 已有环境变量的供应商切回“保存的 Key”时，要显式清除环境变量，否则它仍然优先
   const keyFields = (): { apiKey?: string; apiKeyEnv?: string } =>
-    useEnv ? (apiKeyEnv.trim() ? { apiKeyEnv: apiKeyEnv.trim() } : {}) : apiKey.trim() ? { apiKey: apiKey.trim() } : {};
+    useEnv
+      ? apiKeyEnv.trim()
+        ? { apiKeyEnv: apiKeyEnv.trim() }
+        : {}
+      : {
+          ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
+          ...(provider?.apiKeyEnv !== undefined ? { apiKeyEnv: '' } : {}),
+        };
 
   const save = (): Promise<void> =>
     run('saving', async () => {

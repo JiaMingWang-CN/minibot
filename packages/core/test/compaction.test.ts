@@ -6,7 +6,7 @@ import path from 'node:path';
 import { dataPaths } from '../src/paths.ts';
 import { openDb } from '../src/db/db.ts';
 import { createThread } from '../src/db/threads.ts';
-import { getThread } from '../src/db/threads.ts';
+import { getThread, updateThread } from '../src/db/threads.ts';
 import { messagesFrom, getMessage, appendMessage } from '../src/db/messages.ts';
 import { newBot } from '../src/config/config.ts';
 import type { Bot } from '../src/config/types.ts';
@@ -206,6 +206,19 @@ test('手动压缩：线程空闲时 compactThread(..., "auto") 可用', async (
     (summary.blocks[0] as Extract<Block, { type: 'text' }>).text.startsWith(SUMMARY_PREFIX),
   );
   assert.ok(contextFor(h.db, h.threadId).length >= 2);
+  h.close();
+});
+
+test('压缩后作废 token 基线，估算按压缩后的内容重算', async () => {
+  const h = await setup(1000);
+  h.add('user', [text('第一轮')]);
+  h.add('assistant', [text('a'.repeat(2000))]);
+  const last = h.add('user', [text('第二轮')]);
+  updateThread(h.db, h.threadId, { lastInputTokens: 900, lastInputMsgId: last.id });
+  await compactThread(h.deps, h.bot, h.threadId, 'auto', new AbortController().signal);
+  const thread = getThread(h.db, h.threadId)!;
+  assert.equal(thread.lastInputTokens, null);
+  assert.equal(thread.lastInputMsgId, null);
   h.close();
 });
 

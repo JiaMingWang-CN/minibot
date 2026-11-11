@@ -271,7 +271,7 @@ export async function executeTool(
         replace_all: input['replace_all'] as boolean | undefined,
       });
     } else if (call.name === 'glob') {
-      output = await globFiles(real, { pattern: input['pattern'] as string });
+      output = await globFiles(real, { pattern: input['pattern'] as string }, env.signal);
     } else if (call.name === 'grep') {
       output = await grepFiles(
         real,

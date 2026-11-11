@@ -118,6 +118,7 @@ async function responsesParse(
   model: string,
 ): Promise<void> {
   let hasToolCall = false;
+  let finished = false;
   for await (const ev of events) {
     if (ev.data.length === 0 || ev.data === '[DONE]') continue;
     const payload = JSON.parse(ev.data) as ResponsesPayload;
@@ -163,7 +164,9 @@ async function responsesParse(
         });
       }
       acc.stop(hasToolCall ? 'tool_use' : 'end');
+      finished = true;
     } else if (type === 'response.incomplete') {
+      finished = true;
       const reason = payload.response?.incomplete_details?.reason;
       acc.stop(reason === 'max_output_tokens' ? 'max_tokens' : hasToolCall ? 'tool_use' : 'end');
     } else if (type === 'response.failed') {
@@ -172,6 +175,8 @@ async function responsesParse(
       throw new ModelError('stream', failedMessage(payload), { partial: acc.snapshot() });
     }
   }
+  // 连接断开而没有收到结束事件：半截回复不能当作完整回复
+  if (!finished) throw new ModelError('stream', '响应中途中断', { partial: acc.snapshot() });
 }
 
 export const responsesAdapter: Adapter = {

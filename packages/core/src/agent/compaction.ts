@@ -189,6 +189,9 @@ export async function compactThread(
   updateThread(deps.db, threadId, {
     summaryMsgId: message.id,
     keepFromMsgId: keepMessageId,
+    // 压缩前的输入 token 数已不再代表当前上下文，作废后按内容重新估算
+    lastInputTokens: null,
+    lastInputMsgId: null,
   });
 }
 

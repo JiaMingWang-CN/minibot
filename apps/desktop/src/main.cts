@@ -86,17 +86,31 @@ async function bootstrap(): Promise<void> {
       nodeIntegration: false,
     },
   });
-  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  // 只把 http(s) 链接交给系统浏览器；其他协议（file:、自定义协议）一律不打开
+  const openExternal = (target: string): void => {
+    try {
+      const { protocol } = new URL(target);
+      if (protocol === 'https:' || protocol === 'http:') void shell.openExternal(target);
+    } catch {
+      // 不是合法 URL，忽略
+    }
+  };
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    openExternal(url);
+    return { action: 'deny' };
+  });
   mainWindow.webContents.on('will-navigate', (event, navigationUrl) => {
     if (server === undefined) {
       event.preventDefault();
       return;
     }
     try {
-      if (new URL(navigationUrl).origin !== server.origin) event.preventDefault();
+      if (new URL(navigationUrl).origin === server.origin) return;
     } catch {
-      event.preventDefault();
+      // 落到下面一并拦截
     }
+    event.preventDefault();
+    openExternal(navigationUrl);
   });
   mainWindow.on('closed', () => {
     mainWindow = undefined;
@@ -104,15 +118,27 @@ async function bootstrap(): Promise<void> {
   await mainWindow.loadURL(`${server.origin}/`);
 }
 
-app
-  .whenReady()
-  .then(bootstrap)
-  .catch((err: unknown) => {
-    console.error(err);
-    // 启动失败时给用户一个可见的说明，而不是窗口一闪而过
-    dialog.showErrorBox('minibot 启动失败', err instanceof Error ? err.message : String(err));
-    app.quit();
+// 同一数据目录只能有一个内核：第二个实例的启动修复会把第一个实例进行中的调用记成已取消。
+// 用 MINIBOT_HOME 指向临时目录的调试实例用的是独立数据，不占用这把锁。
+const gotLock = process.env['MINIBOT_HOME'] !== undefined || app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow === undefined) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
   });
+  app
+    .whenReady()
+    .then(bootstrap)
+    .catch((err: unknown) => {
+      console.error(err);
+      // 启动失败时给用户一个可见的说明，而不是窗口一闪而过
+      dialog.showErrorBox('minibot 启动失败', err instanceof Error ? err.message : String(err));
+      app.quit();
+    });
+}
 
 app.on('window-all-closed', () => {
   app.quit();

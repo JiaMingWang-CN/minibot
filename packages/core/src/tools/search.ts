@@ -23,9 +23,15 @@ export function rgPath(): string {
 export async function globFiles(
   dir: string,
   a: { pattern: string },
+  signal?: AbortSignal,
 ): Promise<ToolOutput> {
   const results: string[] = [];
+  const root = path.resolve(dir);
   for await (const entry of glob(a.pattern, { cwd: dir, exclude: GLOB_EXCLUDE })) {
+    if (signal?.aborted === true) return { content: '已取消', isError: true };
+    // 审批只按搜索根目录分类；模式里的 ../ 或绝对路径不能借此越出根目录
+    const rel = path.relative(root, path.resolve(root, entry));
+    if (rel === '' || rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) continue;
     results.push(entry.split(path.sep).join('/'));
   }
   results.sort();
