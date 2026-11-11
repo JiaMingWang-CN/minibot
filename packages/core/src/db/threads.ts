@@ -93,3 +93,15 @@ export function updateThread(db: DatabaseSync, id: string, patch: ThreadPatch): 
 export function deleteThreadRow(db: DatabaseSync, id: string): void {
   db.prepare('DELETE FROM threads WHERE id = ?').run(id);
 }
+
+/** 该 bot 下还没有任何消息的对话（最新的一个），没有则返回 null */
+export function findEmptyThread(db: DatabaseSync, botId: string): Thread | null {
+  const row = db
+    .prepare(
+      `SELECT * FROM threads t WHERE t.bot_id = ?
+       AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.thread_id = t.id)
+       ORDER BY t.created_at DESC LIMIT 1`,
+    )
+    .get(botId);
+  return row === undefined ? null : rowToThread(row as Record<string, unknown>);
+}

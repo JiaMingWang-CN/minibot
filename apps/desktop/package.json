@@ -6,10 +6,17 @@
   "main": "dist/main.cjs",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "start": "electron ."
+    "start": "electron .",
+    "pack": "electron-builder --win nsis --x64",
+    "pack:dir": "electron-builder --win dir --x64"
   },
   "dependencies": {
-    "@minibot/core": "*",
+    "@minibot/core": "*"
+  },
+  "devDependencies": {
+    "electron-builder": "26.18.0",
     "electron": "45.2.3"
-  }
+  },
+  "description": "minibot 桌面端",
+  "author": "minibot"
 }

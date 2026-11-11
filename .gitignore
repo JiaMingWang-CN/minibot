@@ -3,3 +3,4 @@ packages/core/dist/
 apps/desktop/dist/
 .codegraph/
 *.log
+apps/desktop/release/

@@ -1,0 +1,16 @@
+{
+  "appId": "com.minibot.desktop",
+  "productName": "minibot",
+  "directories": { "output": "release" },
+  "files": ["dist/**/*", "package.json"],
+  "asarUnpack": ["**/node_modules/@vscode/ripgrep/bin/**"],
+  "icon": "static/assets/icon.png",
+  "win": { "target": [{ "target": "nsis", "arch": ["x64"] }] },
+  "nsis": {
+    "oneClick": false,
+    "perMachine": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "artifactName": "minibot-setup-${version}.${ext}"
+  }
+}

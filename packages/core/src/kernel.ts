@@ -23,6 +23,7 @@ import { sha256, withPathLock } from './fs/lock.ts';
 import { openDb } from './db/db.ts';
 import {
   createThread,
+  findEmptyThread,
   deleteThreadRow,
   getThread,
   listThreads,
@@ -593,7 +594,8 @@ export class Kernel {
   }
 
   createThread(botId: string): Thread {
-    return createThread(this.db, botId, '新对话');
+    // 已有空对话就直接用它，避免无限新建空对话
+    return findEmptyThread(this.db, botId) ?? createThread(this.db, botId, '新对话');
   }
 
   private threadOrThrow(threadId: string): Thread {
