@@ -1,4 +1,5 @@
 {
+  "enabledMcpjsonServers": ["codegraph", "context7"],
   "enabledPlugins": {
     "logo-design@logo-design-skill": true,
     "frontend-design@anthropic-plugin-directory": true

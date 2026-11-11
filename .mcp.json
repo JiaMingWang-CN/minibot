@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "codegraph": {
+      "command": "sh",
+      "args": [
+        "-c",
+        "[ -d .codegraph ] || npx -y @colbymchenry/codegraph@1.6.2 init --yes . >/dev/null 2>&1; exec npx -y @colbymchenry/codegraph@1.6.2 serve --mcp"
+      ],
+      "env": {
+        "CODEGRAPH_TELEMETRY": "0"
+      }
+    },
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp@4.6.0"],
+      "env": {
+        "CONTEXT7_API_KEY": "${CONTEXT7_API_KEY:-proxy-injected}"
+      }
+    }
+  }
+}
