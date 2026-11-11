@@ -11,7 +11,7 @@
   "scripts": {
     "build": "npm run build --workspace @minibot/core && npm run build --workspace @minibot/desktop && npm run build --workspace @minibot/renderer",
     "start": "npm run start --workspace @minibot/desktop",
-    "test": "node --test packages/core/test/"
+    "test": "node --test \"packages/core/test/*.test.ts\""
   },
   "devDependencies": {
     "@types/node": "24.19.2",

@@ -77,7 +77,12 @@ test('总是允许：批准时勾选后记入 bot.allowedCommands，同一条命
   assert.equal(req.canAlwaysAllow, true);
   assert.equal(h.kernel.respondApproval(req.id, true, true), true);
   await waitIdle(h, 1);
-  const bot = (await h.kernel.state()).bots.find((b) => b.id === h.bot.id)!;
+  // 白名单是异步落盘的，等它写完再断言，避免负载高时读到旧值
+  let bot = (await h.kernel.state()).bots.find((b) => b.id === h.bot.id)!;
+  for (let i = 0; i < 200 && bot.allowedCommands.length === 0; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    bot = (await h.kernel.state()).bots.find((b) => b.id === h.bot.id)!;
+  }
   assert.deepEqual(bot.allowedCommands, ['node --version']);
 
   h.kernel.sendMessage(h.threadId, '再看一次');

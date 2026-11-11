@@ -828,7 +828,11 @@ export class Kernel {
       signal,
       childEnv: this.childEnv(),
       // 读最新配置：本轮中途刚勾选“总是允许”的命令也能生效
-      isCommandAllowed: async (command) => (await this.loadBotOrThrow(bot.id)).allowedCommands.includes(command),
+      // 与“总是允许”的保存共用同一把锁，排在保存之后读，批准后紧接着的同一条命令不会重复询问
+      isCommandAllowed: (command) =>
+        withPathLock(this.paths.botJson(bot.id), async () =>
+          (await this.loadBotOrThrow(bot.id)).allowedCommands.includes(command),
+        ),
       onAllowlisted: (request) => logAllowlisted(this.db, request),
     };
   }
