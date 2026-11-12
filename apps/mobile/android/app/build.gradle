@@ -21,9 +21,6 @@ android {
         sourceCompatibility JavaVersion.VERSION_21
         targetCompatibility JavaVersion.VERSION_21
     }
-    kotlinOptions {
-        jvmTarget = '21'
-    }
     signingConfigs {
         release {
             // 签名信息只从环境变量读取；缺任何一个都让 release 构建失败，不回退到 debug 签名
@@ -56,6 +53,13 @@ android {
 repositories {
     flatDir{
         dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+// Kotlin 2.2 起 kotlinOptions 已是错误级弃用，改用 compilerOptions
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21
     }
 }
 

@@ -5,7 +5,7 @@ export default tseslint.config(
   { ignores: ['**/dist/**', '**/node_modules/**', '.codegraph/**'] },
   ...tseslint.configs.recommended,
   {
-    files: ['apps/renderer/src/**/*.{ts,tsx}'],
+    files: ['apps/renderer/src/**/*.{ts,tsx}', 'apps/mobile/src/**/*.{ts,tsx}'],
     plugins: { 'react-hooks': reactHooks },
     rules: {
       'react-hooks/rules-of-hooks': 'error',

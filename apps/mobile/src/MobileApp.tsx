@@ -117,7 +117,7 @@ function BotView({ api, events, subscribe, bot, bots, onSelectBot, view, setView
   const [failure, setFailure] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<Thread | null>(null);
   const [deleting, setDeleting] = useState<Thread | null>(null);
-  const conv = useConversation({ api, events, subscribe, botId: bot.id, contextWindow: bot.contextWindow, withContext: false, onError: setFailure });
+  const conv = useConversation({ api, events, subscribe, botId: bot.id, contextWindow: bot.contextWindow, withContext: false, autoCreate: false, onError: setFailure });
   const { threads, activeId, setActiveId, running, approvals, refreshThreads, activeRef } = conv;
 
   const open = useCallback(

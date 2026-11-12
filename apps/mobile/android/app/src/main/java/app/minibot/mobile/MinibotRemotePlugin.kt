@@ -35,7 +35,7 @@ class MinibotRemotePlugin : Plugin(), HubSink {
         RemoteHub.init(context)
         RemoteHub.sink = this
         RemoteHub.startConnection()
-        if (RemoteHub.store.load() != null && RemoteHub.background) RemoteService.start(context)
+        if (RemoteHub.isPaired() && RemoteHub.background) RemoteService.start(context)
     }
 
     override fun handleOnDestroy() {
@@ -96,6 +96,11 @@ class MinibotRemotePlugin : Plugin(), HubSink {
                 call.reject(e.message ?: "配对码无效")
             } catch (e: PairingFailedException) {
                 call.reject(e.message ?: "配对失败")
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // 其他意外（如系统密钥库异常）也要回给网页，不能让协程带着异常崩掉 App
+                call.reject(e.message ?: "配对失败")
             }
         }
     }
@@ -103,9 +108,15 @@ class MinibotRemotePlugin : Plugin(), HubSink {
     @PluginMethod
     fun unpair(call: PluginCall) {
         RemoteHub.hubScope.launch {
-            RemoteService.stop(context)
-            RemoteHub.unpair()
-            call.resolve()
+            try {
+                RemoteService.stop(context)
+                RemoteHub.unpair()
+                call.resolve()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                call.reject(e.message ?: "取消配对失败")
+            }
         }
     }
 
@@ -143,7 +154,7 @@ class MinibotRemotePlugin : Plugin(), HubSink {
     @PluginMethod
     fun startBackground(call: PluginCall) {
         RemoteHub.background = true
-        if (RemoteHub.store.load() != null) RemoteService.start(context)
+        if (RemoteHub.isPaired()) RemoteService.start(context)
         status()
         call.resolve()
     }

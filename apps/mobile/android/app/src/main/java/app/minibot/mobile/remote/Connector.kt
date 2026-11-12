@@ -31,6 +31,8 @@ class PairingFailedException(message: String) : Exception(message)
 
 const val HANDSHAKE_TIMEOUT_MS = 10_000L
 const val LAN_RACE_MS = 1_500L
+/** 连续这么多次"承载连通但握手被电脑关闭"才判定为已撤销，避免电脑重启、超时等偶发情况误判 */
+const val REVOKE_AFTER_REJECTIONS = 3
 val BACKOFF_SECONDS = longArrayOf(1, 2, 4, 8, 16, 32, 60)
 
 private sealed interface Ev {
@@ -84,7 +86,13 @@ class Connector(
 
     fun start() {
         if (job?.isActive == true) return
-        if (store.load() == null) return
+        // 读不出（存储暂不可用）也启动：循环里会退避重试
+        val paired = try {
+            store.load() != null
+        } catch (e: StoreUnavailableException) {
+            true
+        }
+        if (!paired) return
         job = scope.launch { loop() }
     }
 
@@ -109,19 +117,35 @@ class Connector(
 
     private suspend fun loop() {
         var attempt = 0
+        var rejections = 0
         while (true) {
-            val pairing = store.load() ?: run { _state.value = ConnectionState.Idle; return }
-            val identity = store.identity()
-            _state.value = ConnectionState.Connecting
-            val start: (Link) -> Unit = { startKk(it, pairing, identity) }
-            val outcome = connectOnce(pairing, pairing.lanAddresses, pairing.lanPort, pairing.relayUrl, pairing.relayToken, pairing.routeId, start, pair = false)
-            activeChannel = null
-            if (outcome is Outcome.Revoked) {
-                _state.value = ConnectionState.Revoked
-                return
+            val loaded = try {
+                val pairing = store.load() ?: run { _state.value = ConnectionState.Idle; return }
+                pairing to store.identity()
+            } catch (e: StoreUnavailableException) {
+                _state.value = ConnectionState.Error(e.message ?: "暂时无法读取配对信息")
+                null
             }
-            if (outcome is Outcome.Ended && outcome.connected) attempt = 0
-            _state.value = ConnectionState.Connecting
+            if (loaded != null) {
+                val (pairing, identity) = loaded
+                _state.value = ConnectionState.Connecting
+                val start: (Link) -> Unit = { startKk(it, pairing, identity) }
+                val outcome = connectOnce(pairing, pairing.lanAddresses, pairing.lanPort, pairing.relayUrl, pairing.relayToken, pairing.routeId, start, pair = false)
+                activeChannel = null
+                if (outcome is Outcome.Revoked) {
+                    rejections += 1
+                    if (rejections >= REVOKE_AFTER_REJECTIONS) {
+                        // 电脑已撤销这台手机：清掉配对，回到配对页，不再重连
+                        store.clear()
+                        _state.value = ConnectionState.Revoked
+                        return
+                    }
+                } else {
+                    rejections = 0
+                }
+                if (outcome is Outcome.Ended && outcome.connected) attempt = 0
+                _state.value = ConnectionState.Connecting
+            }
             val wait = BACKOFF_SECONDS[minOf(attempt, BACKOFF_SECONDS.size - 1)] * 1000
             attempt += 1
             if (withTimeoutOrNull(wait) { kick.receive() } != null) attempt = 0
@@ -148,7 +172,7 @@ class Connector(
         if (relayUrl == null) return if (lanRejected) Outcome.Revoked else Outcome.Ended(false, "没有可用的线路")
         val link = newLink(carriers.relay(relayUrl, routeId, relayToken), Via.RELAY)
         try {
-            return drive(link, start, pair, pcName) {}
+            return drive(link, start, pair, pcName) { true }
         } finally {
             dropLink(link)
         }
@@ -164,6 +188,7 @@ class Connector(
     ): Outcome? {
         val connected = CompletableDeferred<Link>()
         val lanLinks = addresses.map { newLink(carriers.lan(it, port), Via.LAN) }
+        // 只有第一个握手成功的承载能成为当前连接；后到的直接关掉，不碰 activeChannel
         val drives = lanLinks.map { link -> scope.async { drive(link, start, pair, pcName) { connected.complete(link) } } }
         val allDone = scope.async { drives.awaitAll(); null as Link? }
         val winner = withTimeoutOrNull(LAN_RACE_MS) {
@@ -210,8 +235,12 @@ class Connector(
 
     private enum class Phase { OPEN, WAIT_PEER, HANDSHAKE, CONNECTED, PAIRED }
 
-    /** 单条承载的状态机：打开 → 等电脑在线 → 握手 → 连通，中继上电脑下线再上线会在同一承载上重新握手 */
-    private suspend fun drive(link: Link, start: (Link) -> Unit, pair: Boolean, pcName: String, onConnected: () -> Unit): Outcome {
+    /**
+     * 单条承载的状态机：打开 → 等电脑在线 → 握手 → 连通，中继上电脑下线再上线会在同一承载上重新握手。
+     * claim：首次握手成功时调用，返回 false 表示另一条承载已胜出，本条应放弃。
+     */
+    private suspend fun drive(link: Link, start: (Link) -> Unit, pair: Boolean, pcName: String, claim: () -> Boolean): Outcome {
+        var claimed = false
         var phase = Phase.OPEN
         var connectedOnce = false
         while (true) {
@@ -249,6 +278,14 @@ class Connector(
                     }
                 }
                 Ev.Ready -> if (phase == Phase.HANDSHAKE) {
+                    // 中继上电脑下线再上线会在同一承载上再次握手，那时已经认领过
+                    if (!claimed) {
+                        if (!claim()) {
+                            link.close()
+                            return Outcome.Ended(false, "另一条线路已连上")
+                        }
+                        claimed = true
+                    }
                     if (pair) {
                         phase = Phase.PAIRED
                     } else {
@@ -256,7 +293,6 @@ class Connector(
                         connectedOnce = true
                         activeChannel = link.channel
                         _state.value = ConnectionState.Connected(link.via, pcName)
-                        onConnected()
                     }
                 }
                 Ev.Paired -> if (phase == Phase.PAIRED) return Outcome.Paired
@@ -331,7 +367,12 @@ class Connector(
         val name = deviceName.trim()
         if (name.isEmpty() || name.length > 40) throw PairingFailedException("设备名需要 1–40 个字符")
         stop()
-        val identity = store.identity()
+        val identity = try {
+            store.identity()
+        } catch (e: StoreUnavailableException) {
+            resumeIfPaired()
+            throw PairingFailedException(e.message ?: "暂时无法读取配对信息")
+        }
         val routeId = routeIdOf(offer.pcPublicKey)
         _state.value = ConnectionState.Connecting
         val outcome = connectOnce(
@@ -340,10 +381,20 @@ class Connector(
         )
         closeAll()
         if (outcome !is Outcome.Paired) {
-            _state.value = ConnectionState.Idle
-            val reason = (outcome as? Outcome.Ended)?.message ?: "电脑拒绝了配对"
-            throw PairingFailedException("配对失败：$reason")
+            // 原来已配对（例如重新配对失败）就恢复原连接，不能停在未连接
+            resumeIfPaired()
+            throw PairingFailedException((outcome as? Outcome.Ended)?.message ?: "电脑拒绝了配对")
         }
+        try {
+            savePairing(offer, routeId, identity)
+        } catch (e: StoreUnavailableException) {
+            resumeIfPaired()
+            throw PairingFailedException(e.message ?: "暂时无法保存配对信息")
+        }
+        start()
+    }
+
+    private fun savePairing(offer: PairingOffer, routeId: String, identity: KeyPair) {
         store.save(
             Pairing(
                 pcName = offer.pcName,
@@ -356,6 +407,10 @@ class Connector(
                 deviceId = deviceIdOf(identity.publicKey),
             ),
         )
+    }
+
+    private fun resumeIfPaired() {
+        _state.value = ConnectionState.Idle
         start()
     }
 }

@@ -79,7 +79,14 @@ export function ThreadListScreen({
         ) : (
           <ul>
             {threads.map((th) => (
-              <li key={th.id} className="flex items-center border-b-[0.5px] border-edge">
+              <li
+                key={th.id}
+                className="flex items-center border-b-[0.5px] border-edge"
+                onContextMenu={(e) => {
+                  // 长按（安卓 WebView 触发 contextmenu）打开这一行的菜单
+                  e.preventDefault();
+                  e.currentTarget.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')?.click();
+                }}>
                 <button type="button" onClick={() => onOpen(th.id)} className="flex min-w-0 flex-1 flex-col gap-1 px-4 py-3 text-left">
                   <span className="truncate text-[15px]">{th.title}</span>
                   <span className="flex items-center gap-2 text-[12px] text-ink-tertiary">

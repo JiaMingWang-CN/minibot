@@ -30,6 +30,7 @@ export function useConversation({
   botId,
   contextWindow,
   withContext = true,
+  autoCreate = true,
   onError,
 }: {
   api: Api;
@@ -39,6 +40,8 @@ export function useConversation({
   contextWindow: number;
   /** 手机端的白名单不含上下文用量接口，传 false 就不去取 */
   withContext?: boolean;
+  /** 没有对话时自动建一个（桌面端需要一个可输入的对话；手机端列表页由用户自己新建） */
+  autoCreate?: boolean;
   onError: (message: string) => void;
 }) {
   const [threads, setThreads] = useState<Thread[]>([]);
@@ -86,7 +89,7 @@ export function useConversation({
     void (async () => {
       try {
         let list = await refreshThreads();
-        if (list.length === 0) {
+        if (list.length === 0 && autoCreate) {
           await api.createThread(botId);
           list = await refreshThreads();
         }
@@ -96,7 +99,7 @@ export function useConversation({
         onError(errorText(err));
       }
     })();
-  }, [api, botId, refreshThreads, onError]);
+  }, [api, botId, refreshThreads, onError, autoCreate]);
 
   // 切换对话：读消息与用量，回到底部
   useEffect(() => {

@@ -93,7 +93,10 @@ fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 
 fun hexToBytes(hex: String): ByteArray = ByteArray(hex.length / 2) { hex.substring(it * 2, it * 2 + 2).toInt(16).toByte() }
 
-/** 手机长期身份与配对信息的持久化；Android 实现见 KeystorePairingStore */
+/** 存储暂时不可用（如系统密钥库暂时取不到）；数据还在，稍后重试，不能当作未配对去覆盖 */
+class StoreUnavailableException(message: String) : Exception(message)
+
+/** 手机长期身份与配对信息的持久化；Android 实现见 KeystorePairingStore。读写失败抛 StoreUnavailableException */
 interface PairingStore {
     fun load(): Pairing?
     fun identity(): KeyPair

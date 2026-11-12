@@ -70,4 +70,13 @@ class NotifierTest {
         n.onEvent(turn("t1", "idle"))
         assertEquals(1, poster.posted.size)
     }
+
+    @Test
+    fun seededRunningThreadNotifiesWhenItFinishes() = runBlocking {
+        val poster = FakePoster()
+        val n = notifier(poster)
+        n.seedRunning(listOf("t9"))
+        n.onEvent(turn("t9", "idle"))
+        assertEquals(CHANNEL_DONE, poster.posted.single().channel)
+    }
 }

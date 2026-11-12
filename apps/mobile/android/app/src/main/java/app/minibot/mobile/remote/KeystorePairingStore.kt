@@ -2,19 +2,26 @@ package app.minibot.mobile.remote
 
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
 import java.io.File
 import java.security.KeyStore
+import java.security.UnrecoverableKeyException
 import java.util.Base64
+import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+import org.json.JSONException
 import org.json.JSONObject
 
 /**
  * 手机长期私钥与配对信息存在应用私有文件里，整体用 Android Keystore 里的一把 AES-GCM 密钥加密。
  * 该密钥不要求用户验证（不加应用锁，后台需要自动重连）。
+ *
+ * 读失败分两种：数据确实坏了 / 密钥永久失效（换不回来）→ 删掉文件，当作未配对；
+ * 其余（密钥库暂时不可用等）→ 抛 StoreUnavailableException，不缓存、不覆盖，稍后再试。
  */
 class KeystorePairingStore(context: Context) : PairingStore {
     private val file = File(context.filesDir, "pairing.bin")
@@ -36,28 +43,40 @@ class KeystorePairingStore(context: Context) : PairingStore {
 
     private fun read(): JSONObject {
         cache?.let { return it }
+        if (!file.exists()) return JSONObject().also { cache = it }
         val json = try {
-            if (!file.exists()) JSONObject() else {
-                val raw = file.readBytes()
-                val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-                cipher.init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(128, raw.copyOfRange(0, 12)))
-                JSONObject(String(cipher.doFinal(raw, 12, raw.size - 12), Charsets.UTF_8))
-            }
+            val raw = file.readBytes()
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(128, raw.copyOfRange(0, 12)))
+            JSONObject(String(cipher.doFinal(raw, 12, raw.size - 12), Charsets.UTF_8))
         } catch (e: Exception) {
-            // 密钥失效或文件损坏：视为未配对，让用户重新配对
+            if (!isPermanent(e)) throw StoreUnavailableException("暂时无法读取配对信息，请稍后再试")
+            // 永久读不出：只能重新配对
+            file.delete()
             JSONObject()
         }
         cache = json
         return json
     }
 
-    @Synchronized
+    private fun isPermanent(e: Exception): Boolean =
+        e is AEADBadTagException ||
+            e is KeyPermanentlyInvalidatedException ||
+            e is UnrecoverableKeyException ||
+            e is JSONException ||
+            e is IndexOutOfBoundsException ||
+            e is IllegalArgumentException
+
     private fun write(json: JSONObject) {
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, secretKey())
-        val body = cipher.doFinal(json.toString().toByteArray(Charsets.UTF_8))
+        val body = try {
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.ENCRYPT_MODE, secretKey())
+            cipher.iv + cipher.doFinal(json.toString().toByteArray(Charsets.UTF_8))
+        } catch (e: Exception) {
+            throw StoreUnavailableException("暂时无法保存配对信息，请稍后再试")
+        }
         val tmp = File(file.parentFile, "pairing.bin.tmp")
-        tmp.writeBytes(cipher.iv + body)
+        tmp.writeBytes(body)
         if (!tmp.renameTo(file)) {
             file.delete()
             tmp.renameTo(file)
@@ -74,14 +93,14 @@ class KeystorePairingStore(context: Context) : PairingStore {
         val stored = json.optString("identity")
         if (stored.isNotEmpty()) return Noise.keyPairOf(Base64.getUrlDecoder().decode(stored))
         val fresh = Noise.generateKeyPair()
-        json.put("identity", Base64.getUrlEncoder().withoutPadding().encodeToString(fresh.privateKey))
-        write(json)
+        // 在副本上改，写盘成功后才更新缓存
+        write(JSONObject(json.toString()).put("identity", Base64.getUrlEncoder().withoutPadding().encodeToString(fresh.privateKey)))
         return fresh
     }
 
     @Synchronized
     override fun save(pairing: Pairing) {
-        write(read().put("pairing", pairing.toJson()))
+        write(JSONObject(read().toString()).put("pairing", pairing.toJson()))
     }
 
     @Synchronized

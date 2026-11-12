@@ -47,6 +47,8 @@ apps/mobile/android/app/build/outputs/apk/release/app-release.apk
 npm run test:android --workspace @minibot/mobile
 ```
 
+这条命令会先构建网页并执行 `npx cap sync android`。`android/capacitor-cordova-android-plugins/` 由 `cap sync` 生成、不入库，新克隆的仓库在直接用 Gradle 或 Android Studio 打开 `android/` 之前，也要先跑一次 `npm run build --workspace @minibot/mobile && npx cap sync android`（在 `apps/mobile` 下）。
+
 互通夹具 `packages/core/test/fixtures/remote-interop.json` 由电脑端测试生成（`UPDATE_FIXTURES=1 npm test` 重写），Kotlin 端读同一个文件。
 
 ## 首次使用

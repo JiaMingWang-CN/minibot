@@ -32,7 +32,13 @@ class Notifier(
     /** 网页可见且当前对话等于 threadId */
     private val isViewing: (threadId: String) -> Boolean,
 ) {
+    /** 只在 RemoteHub 的单个消息协程里访问 */
     private val running = mutableSetOf<String>()
+
+    /** 连上时已在运行的对话（连上之前错过了它们的 running 事件） */
+    fun seedRunning(threadIds: List<String>) {
+        running.addAll(threadIds)
+    }
 
     suspend fun onEvent(event: JSONObject) {
         when (event.optString("type")) {

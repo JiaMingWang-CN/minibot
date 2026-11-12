@@ -11,6 +11,7 @@ import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runTest
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -42,6 +43,7 @@ class ConnectorTest {
 
     /** 电脑一端：把手机发来的帧当作电脑网关来应答 */
     private inner class PcEnd(private val phoneEnd: ScriptedCarrier) : Carrier {
+        val received = mutableListOf<JSONObject>()
         override var onOpen: () -> Unit = {}
         override var onPeer: (Boolean) -> Unit = {}
         override var onFrame: (ByteArray) -> Unit = {}
@@ -56,6 +58,7 @@ class ConnectorTest {
             phoneEnd.onFrame(byteArrayOf(FRAME_KK) + hs.writeMessage(ByteArray(0)))
             val (send, recv) = hs.split()
             val channel = SecureChannel(this, send, recv)
+            channel.onMessage = { received.add(it) }
             channel.send(JSONObject().put("t", "ready").put("pcName", "测试电脑"))
         }
     }
@@ -66,7 +69,7 @@ class ConnectorTest {
         override var onFrame: (ByteArray) -> Unit = {}
         override var onClose: (CloseReason) -> Unit = {}
         var closed = false
-        private val pcEnd = PcEnd(this)
+        val pcEnd = PcEnd(this)
 
         init {
             val open = script.openAfterMs
@@ -108,7 +111,10 @@ class ConnectorTest {
         private val scope: CoroutineScope,
         private val lan: Script? = null,
         private val relay: Script? = null,
+        /** 依次用于每次新建的中继承载，用完后重复最后一个；为空时用 relay */
+        private val relaySeq: List<Script> = emptyList(),
     ) : CarrierFactory {
+        val lanCarriers = mutableListOf<ScriptedCarrier>()
         var lanCreated = 0
         var relayCreated = 0
         val relayTimes = mutableListOf<Long>()
@@ -116,19 +122,20 @@ class ConnectorTest {
 
         override fun lan(address: String, port: Int): Carrier {
             lanCreated++
-            return ScriptedCarrier(lan ?: Script(null), scope, false)
+            return ScriptedCarrier(lan ?: Script(null), scope, false).also { lanCarriers.add(it) }
         }
 
         override fun relay(url: String, routeId: String, token: String?): Carrier {
             relayCreated++
             relayTimes.add(now())
-            return ScriptedCarrier(relay ?: Script(null), scope, true)
+            val script = if (relaySeq.isEmpty()) relay ?: Script(null) else relaySeq[minOf(relayCreated - 1, relaySeq.size - 1)]
+            return ScriptedCarrier(script, scope, true)
         }
     }
 
-    private fun TestScope.connector(p: Pairing, factory: Factory): Connector {
+    private fun TestScope.connector(p: Pairing, factory: Factory, store: MemoryPairingStore = MemoryPairingStore(p, phone)): Connector {
         factory.now = { currentTime }
-        return Connector(backgroundScope, MemoryPairingStore(p, phone), factory)
+        return Connector(backgroundScope, store, factory)
     }
 
     @Test
@@ -176,16 +183,43 @@ class ConnectorTest {
     }
 
     @Test
-    fun closedDuringHandshakeIsRevokedAndStopsRetrying() = runTest {
+    fun closedDuringHandshakeIsRevokedClearsPairingAndStopsRetrying() = runTest {
         val factory = Factory(backgroundScope, relay = Script(0, Behavior.REJECT))
-        val c = connector(pairing(relay = "wss://r/v1"), factory)
+        val store = MemoryPairingStore(pairing(relay = "wss://r/v1"), phone)
+        val c = connector(pairing(relay = "wss://r/v1"), factory, store)
         c.start()
-        advanceTimeBy(1000)
+        advanceTimeBy(10_000)
         assertEquals(ConnectionState.Revoked, c.state.value)
-        val created = factory.relayCreated
+        assertEquals(REVOKE_AFTER_REJECTIONS, factory.relayCreated)
+        assertNull(store.load())
         advanceTimeBy(120_000)
-        assertEquals(created, factory.relayCreated)
+        assertEquals(REVOKE_AFTER_REJECTIONS, factory.relayCreated)
         assertEquals(ConnectionState.Revoked, c.state.value)
+    }
+
+    @Test
+    fun singleRejectionIsNotRevocation() = runTest {
+        val factory = Factory(backgroundScope, relaySeq = listOf(Script(0, Behavior.REJECT), Script(0)))
+        val store = MemoryPairingStore(pairing(relay = "wss://r/v1"), phone)
+        val c = connector(pairing(relay = "wss://r/v1"), factory, store)
+        c.start()
+        advanceTimeBy(5_000)
+        assertEquals(ConnectionState.Connected(Via.RELAY, "测试电脑"), c.state.value)
+        assertTrue(store.load() != null)
+    }
+
+    @Test
+    fun twoLanAddressesBothReachablePicksOneLiveChannel() = runTest {
+        val factory = Factory(backgroundScope, lan = Script(100))
+        val c = connector(pairing(lan = listOf("192.168.1.5", "10.0.0.5")), factory)
+        c.start()
+        advanceTimeBy(500)
+        assertEquals(ConnectionState.Connected(Via.LAN, "测试电脑"), c.state.value)
+        c.send(JSONObject().put("t", "req").put("id", "1"))
+        // 消息必须落到仍然打开的那条承载上，而不是被关掉的落选者
+        val live = factory.lanCarriers.filter { !it.closed }
+        assertEquals(1, live.size)
+        assertEquals("1", live.single().pcEnd.received.single().getString("id"))
     }
 
     @Test

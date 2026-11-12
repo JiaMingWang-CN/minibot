@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc --noEmit -p tsconfig.json && vite build",
     "apk": "npm run build && cap sync android && cd android && ./gradlew assembleRelease",
-    "test:android": "cd android && ./gradlew testDebugUnitTest"
+    "test:android": "npm run build && cap sync android && cd android && ./gradlew testDebugUnitTest"
   },
   "dependencies": {
     "@capacitor/android": "8.6.0",

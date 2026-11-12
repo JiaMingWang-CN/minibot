@@ -12,6 +12,7 @@ import app.minibot.mobile.remote.Connector
 import app.minibot.mobile.remote.KeystorePairingStore
 import app.minibot.mobile.remote.OkHttpCarrierFactory
 import app.minibot.mobile.remote.PairingStore
+import app.minibot.mobile.remote.StoreUnavailableException
 import app.minibot.mobile.remote.Via
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
@@ -20,10 +21,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
 
@@ -53,6 +56,8 @@ object RemoteHub {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var initialized = false
 
+    /** 电脑发来的非应答消息：单个协程按到达顺序处理（delta 必须按序拼接） */
+    private val inbox = Channel<JSONObject>(Channel.UNLIMITED)
     private val pending = ConcurrentHashMap<String, CompletableDeferred<JSONObject>>()
     private val nextId = AtomicInteger(1)
     private val botNames = ConcurrentHashMap<String, String>()
@@ -77,7 +82,12 @@ object RemoteHub {
         store = KeystorePairingStore(appContext)
         poster = AndroidPoster(appContext)
         connector = Connector(scope, store, OkHttpCarrierFactory())
-        connector.onMessage = { message -> scope.launch { handle(message) } }
+        connector.onMessage = { message ->
+            // 应答直接交给等待者：处理事件时可能要发请求并等应答，放进同一队列会互相等死
+            if (message.optString("t") == "res") pending[message.optString("id")]?.complete(message)
+            else inbox.trySend(message)
+        }
+        scope.launch { for (message in inbox) handle(message) }
         notifier = Notifier(
             poster = poster,
             text = NotifierText(
@@ -93,6 +103,8 @@ object RemoteHub {
         )
         connector.state.onEach { state ->
             if (state !is ConnectionState.Connected) rejectAll()
+            // 被电脑撤销：配对已清除，不必再保持后台连接
+            if (state is ConnectionState.Revoked) RemoteService.stop(appContext)
             sink?.status()
         }.launchIn(scope)
         watchNetwork()
@@ -114,7 +126,14 @@ object RemoteHub {
     }
 
     fun startConnection() {
-        if (store.load() != null) connector.start()
+        connector.start()
+    }
+
+    /** 是否已配对；存储暂时读不出时按已配对处理（数据还在） */
+    fun isPaired(): Boolean = try {
+        store.load() != null
+    } catch (e: StoreUnavailableException) {
+        true
     }
 
     // —— 请求 / 应答 ——
@@ -127,7 +146,8 @@ object RemoteHub {
         try {
             val message = JSONObject().put("t", "req").put("id", id).put("method", method).put("path", path)
             if (body != null) message.put("body", body)
-            connector.send(message)
+            // 大消息会按承载积压阻塞分批发送，放到 IO 线程；超时从全部送出后开始算
+            withContext(Dispatchers.IO) { connector.send(message) }
             return withTimeout(REQUEST_TIMEOUT_MS) { deferred.await() }
         } finally {
             pending.remove(id)
@@ -135,7 +155,7 @@ object RemoteHub {
     }
 
     fun sendControl(msg: Any) {
-        connector.send(JSONObject().put("t", "ctl").put("msg", msg))
+        scope.launch(Dispatchers.IO) { connector.send(JSONObject().put("t", "ctl").put("msg", msg)) }
     }
 
     private fun rejectAll() {
@@ -145,7 +165,6 @@ object RemoteHub {
 
     private suspend fun handle(message: JSONObject) {
         when (message.optString("t")) {
-            "res" -> pending[message.optString("id")]?.complete(message)
             "evt" -> {
                 val event = message.optJSONObject("event") ?: return
                 notifier.onEvent(event)
@@ -154,6 +173,7 @@ object RemoteHub {
             "ready" -> {
                 sink?.ready(message.optString("pcName"))
                 refreshBots()
+                refreshRunning()
             }
         }
     }
@@ -171,6 +191,16 @@ object RemoteHub {
             }
         } catch (e: Exception) {
             // 取不到就用默认名
+        }
+    }
+
+    /** 连上时已在运行的对话：之后它结束也要发完成通知 */
+    private suspend fun refreshRunning() {
+        try {
+            val ids = request("GET", "/api/running", null).optJSONArray("body") ?: return
+            notifier.seedRunning(List(ids.length()) { ids.getString(it) })
+        } catch (e: Exception) {
+            // 取不到就只按之后收到的事件判断
         }
     }
 
@@ -194,7 +224,11 @@ object RemoteHub {
     // —— 状态 ——
 
     fun statusJson(): JSONObject {
-        val pairing = store.load()
+        val pairing = try {
+            store.load()
+        } catch (e: StoreUnavailableException) {
+            return baseStatus(paired = true, pcName = null, connection = "error", error = e.message)
+        }
         val state = connector.state.value
         val connection = when (state) {
             ConnectionState.Idle -> "idle"
@@ -204,13 +238,17 @@ object RemoteHub {
             ConnectionState.Revoked -> "revoked"
             is ConnectionState.Error -> "error"
         }
+        return baseStatus(pairing != null, pairing?.pcName, connection, (state as? ConnectionState.Error)?.message)
+    }
+
+    private fun baseStatus(paired: Boolean, pcName: String?, connection: String, error: String?): JSONObject {
         val power = appContext.getSystemService(PowerManager::class.java)
         return JSONObject()
-            .put("paired", pairing != null)
+            .put("paired", paired)
             .put("deviceModel", Build.MODEL)
-            .put("pcName", pairing?.pcName ?: JSONObject.NULL)
+            .put("pcName", pcName ?: JSONObject.NULL)
             .put("connection", connection)
-            .put("error", (state as? ConnectionState.Error)?.message ?: JSONObject.NULL)
+            .put("error", error ?: JSONObject.NULL)
             .put("background", background)
             .put("notificationsAllowed", NotificationManagerCompat.from(appContext).areNotificationsEnabled())
             .put("batteryOptimized", !power.isIgnoringBatteryOptimizations(appContext.packageName))
