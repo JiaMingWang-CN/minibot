@@ -3,7 +3,7 @@ import type { Kernel } from '../kernel.ts';
 import { dataPaths } from '../paths.ts';
 import type { KeyCrypto } from '../secrets/store.ts';
 import type { Carrier } from './channel.ts';
-import { RemoteGateway } from './gateway.ts';
+import { RemoteGateway, type PhoneCompat } from './gateway.ts';
 import { LanListener } from './lan-listener.ts';
 import { RelayLink } from './relay-link.ts';
 import { RemoteStore, type ConfigPatch, type Device, type RemoteConfig } from './store.ts';
@@ -18,7 +18,7 @@ export interface RemoteStatus {
   relayError: string | null;
   lan: 'off' | 'listening' | 'error';
   lanError: string | null;
-  devices: (Device & { online: boolean })[];
+  devices: (Device & { online: boolean; appVersion: string | null; compat: PhoneCompat })[];
   pairing: { code: string; expiresAt: number } | null;
 }
 
@@ -71,7 +71,7 @@ export class RemoteService {
       crypto: o.crypto,
       ...(o.platform !== undefined ? { platform: o.platform } : {}),
     });
-    const gateway = new RemoteGateway(kernel, store, { lanAddresses });
+    const gateway = new RemoteGateway(kernel, store, { lanAddresses, appVersion: kernel.version() });
     // 中继口令也登记为密钥：之后任何日志与事件里出现它都会被替换
     const token = store.relayToken();
     if (token !== null) kernel.diag.secrets.add(token);
@@ -94,7 +94,10 @@ export class RemoteService {
       relayError: this.relayError,
       lan: this.lanState,
       lanError: this.lanError,
-      devices: this.store.devices().map((d) => ({ ...d, online: online.has(d.id) })),
+      devices: this.store.devices().map((d) => {
+        const version = this.gateway.deviceVersion(d.id);
+        return { ...d, online: online.has(d.id), appVersion: version.appVersion, compat: version.compat };
+      }),
       pairing: this.gateway.pairing(),
     };
   }

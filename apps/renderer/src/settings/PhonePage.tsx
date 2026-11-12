@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import type { Device, RemoteStatus } from '@minibot/core';
+import type { ReactNode } from 'react';
 import type { Api } from '../api';
 import type { Subscribe } from '../App';
 import { t } from '../i18n';
@@ -33,6 +34,13 @@ function lastSeenText(device: Device, now: number): string {
   if (device.lastSeenAt === null) return t('phone.devices.never');
   const via = device.lastVia === 'lan' ? t('phone.devices.viaLan') : t('phone.devices.viaRelay');
   return t('phone.devices.lastSeen', { time: relativeTime(device.lastSeenAt, now), via });
+}
+
+function compatMessage(compat: RemoteStatus['devices'][number]['compat']): ReactNode {
+  if (compat === 'phone_outdated' || compat === 'pc_outdated') {
+    return <span className="text-warning">{t(`phone.compat.${compat}` as 'phone.compat.phone_outdated')}</span>;
+  }
+  return undefined;
 }
 
 export function PhonePage({ api, subscribe }: { api: Api; subscribe: Subscribe }) {
@@ -200,7 +208,16 @@ export function PhonePage({ api, subscribe }: { api: Api; subscribe: Subscribe }
         <SettingsRows>
           {status.devices.length === 0 && <SettingRow title={t('phone.devices.empty')} />}
           {status.devices.map((device) => (
-            <SettingRow key={device.id} title={device.name} subtitle={lastSeenText(device, now)}>
+            <SettingRow
+              key={device.id}
+              title={device.name}
+              subtitle={
+                <>
+                  {lastSeenText(device, now)}
+                  {device.appVersion !== null && ` · ${t('phone.devices.version', { version: device.appVersion })}`}
+                </>
+              }
+              message={compatMessage(device.compat)}>
               {device.online && (
                 <span className="flex items-center gap-1.5 text-[12px] text-success">
                   <Dot tone="ok" />

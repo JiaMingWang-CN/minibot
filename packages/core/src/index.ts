@@ -57,3 +57,9 @@ export type {
 export type { ApprovalRequest } from './approval/broker.ts';
 export type { Revision, RevisionSource } from './memory/revisions.ts';
 export { RemoteService, type RemoteStatus, type RemoteConfig, type Device } from './remote/service.ts';
+export {
+  REMOTE_PROTOCOL,
+  MIN_PHONE_PROTOCOL,
+  type PhoneCompat,
+  type DeviceVersion,
+} from './remote/gateway.ts';

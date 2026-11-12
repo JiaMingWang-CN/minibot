@@ -19,12 +19,25 @@ const DEFAULT_HANDSHAKE_TIMEOUT_MS = 10_000;
 const DEVICE_ID_BYTES = 16;
 const MAX_MESSAGE_BODY_BYTES = 32 * 1024 * 1024;
 
+/** 远程协议的当前版本；消息格式有不兼容改动时 +1 */
+export const REMOTE_PROTOCOL = 1;
+/** 电脑端能接受的最低手机协议版本 */
+export const MIN_PHONE_PROTOCOL = 1;
+
+export type PhoneCompat = 'ok' | 'phone_outdated' | 'pc_outdated' | 'unknown';
+
+export interface DeviceVersion {
+  appVersion: string | null;
+  compat: PhoneCompat;
+}
+
 export type { PairingOffer };
 
 interface Session {
   channel: SecureChannel;
   deviceId: string;
   unsubscribe: () => void;
+  version: DeviceVersion;
 }
 
 export interface GatewayOptions {
@@ -32,6 +45,10 @@ export interface GatewayOptions {
   handshakeTimeoutMs?: number;
   /** 当前的局域网地址；ready 里带给手机，让电脑换 IP 后手机能自己更新 */
   lanAddresses?: () => string[];
+  /** 测试注入的“能接受的最低手机协议版本” */
+  minPhoneProtocol?: number;
+  /** 本机版本号，随 version 消息发给手机 */
+  appVersion?: string;
 }
 
 export class RemoteGateway {
@@ -40,9 +57,13 @@ export class RemoteGateway {
   private readonly now: () => number;
   private readonly handshakeTimeoutMs: number;
   private readonly lanAddresses: () => string[];
+  private readonly minPhoneProtocol: number;
+  private readonly appVersion: string;
   private offer: ActiveOffer | null = null;
   private offerTimer: NodeJS.Timeout | null = null;
   private readonly sessions = new Map<string, Set<Session>>();
+  /** 每台设备最后一次报告的版本与兼容结果，供设置页显示 */
+  private readonly versions = new Map<string, DeviceVersion>();
   private readonly carriers = new Set<Carrier>();
   private readonly listeners = new Set<() => void>();
   private closed = false;
@@ -53,6 +74,8 @@ export class RemoteGateway {
     this.now = o.now ?? Date.now;
     this.handshakeTimeoutMs = o.handshakeTimeoutMs ?? DEFAULT_HANDSHAKE_TIMEOUT_MS;
     this.lanAddresses = o.lanAddresses ?? (() => []);
+    this.minPhoneProtocol = o.minPhoneProtocol ?? MIN_PHONE_PROTOCOL;
+    this.appVersion = o.appVersion ?? '';
   }
 
   // —— 配对邀请 ——
@@ -117,6 +140,11 @@ export class RemoteGateway {
 
   onlineDeviceIds(): string[] {
     return [...this.sessions.entries()].filter(([, set]) => set.size > 0).map(([id]) => id);
+  }
+
+  /** 设备最后一次报告的版本；没报告过（旧版手机）或从未连过时为 unknown */
+  deviceVersion(deviceId: string): DeviceVersion {
+    return this.versions.get(deviceId) ?? { appVersion: null, compat: 'unknown' };
   }
 
   on(listener: () => void): () => void {
@@ -269,7 +297,7 @@ export class RemoteGateway {
   }
 
   private startSession(channel: SecureChannel, deviceId: string, via: 'lan' | 'relay', pairedName: string | null): void {
-    const session: Session = { channel, deviceId, unsubscribe: () => {} };
+    const session: Session = { channel, deviceId, unsubscribe: () => {}, version: this.deviceVersion(deviceId) };
     let set = this.sessions.get(deviceId);
     if (set === undefined) {
       set = new Set();
@@ -283,7 +311,7 @@ export class RemoteGateway {
       if (set.size === 0) this.sessions.delete(deviceId);
       this.notify();
     });
-    channel.onMessage((message) => this.handleMessage(channel, message));
+    channel.onMessage((message) => this.handleMessage(channel, session, message));
 
     void this.store.touch(deviceId, via).catch(() => {});
     if (pairedName !== null) channel.send({ t: 'paired', deviceId });
@@ -294,6 +322,13 @@ export class RemoteGateway {
       lan: config.lanEnabled ? this.lanAddresses() : [],
       port: config.lanPort,
     });
+    // ready 之后紧接着告知协议版本：旧版手机不认识会忽略，按 protocol 1 处理
+    channel.send({
+      t: 'version',
+      app: this.appVersion,
+      protocol: REMOTE_PROTOCOL,
+      minPeer: this.minPhoneProtocol,
+    });
     session.unsubscribe = this.kernel.on((event) => {
       if (event.type === 'memory_changed') return;
       channel.send({ t: 'evt', event });
@@ -303,14 +338,51 @@ export class RemoteGateway {
 
   // —— 会话内消息 ——
 
-  private handleMessage(channel: SecureChannel, message: unknown): void {
+  private handleMessage(channel: SecureChannel, session: Session, message: unknown): void {
     if (typeof message !== 'object' || message === null) return;
     const m = message as Record<string, unknown>;
     if (m['t'] === 'req') {
-      void this.handleRequest(channel, m);
+      void this.handleRequest(channel, session, m);
     } else if (m['t'] === 'ctl') {
       this.handleControl(m['msg']);
+    } else if (m['t'] === 'version') {
+      this.handleVersion(session, m);
     }
+  }
+
+  /** 手机的 version：协议号不兼容时该会话只回 incompatible，不再正常收发 */
+  private handleVersion(session: Session, m: Record<string, unknown>): void {
+    const protocol = m['protocol'];
+    const minPeer = m['minPeer'];
+    if (typeof protocol !== 'number' || !Number.isFinite(protocol)) return;
+    if (typeof minPeer !== 'number' || !Number.isFinite(minPeer)) return;
+    const phoneProtocol = Math.max(0, Math.floor(protocol));
+    const phoneMinPeer = Math.max(0, Math.floor(minPeer));
+    const appVersion = typeof m['app'] === 'string' && m['app'].length > 0 ? m['app'].slice(0, 64) : null;
+    let compat: PhoneCompat = 'ok';
+    if (phoneProtocol < this.minPhoneProtocol) compat = 'phone_outdated';
+    else if (REMOTE_PROTOCOL < phoneMinPeer) compat = 'pc_outdated';
+    session.version = { appVersion, compat };
+    this.versions.set(session.deviceId, session.version);
+    const diag = this.kernel.diag;
+    if (compat === 'ok') {
+      diag.write('info', 'remote', 'version.ok', { appVersion, phoneProtocol });
+    } else {
+      const data = {
+        result: compat,
+        pcProtocol: REMOTE_PROTOCOL,
+        phoneProtocol,
+        pcApp: this.appVersion.slice(0, 64),
+        phoneApp: appVersion ?? '',
+        phoneMinPeer,
+      };
+      diag.write('warn', 'remote', 'version.mismatch', data, {
+        kind: 'error',
+        name: 'remote.version_mismatch',
+        data,
+      });
+    }
+    this.notify();
   }
 
   private handleControl(raw: unknown): void {
@@ -324,7 +396,7 @@ export class RemoteGateway {
     }
   }
 
-  private async handleRequest(channel: SecureChannel, m: Record<string, unknown>): Promise<void> {
+  private async handleRequest(channel: SecureChannel, session: Session, m: Record<string, unknown>): Promise<void> {
     const id = m['id'];
     if (typeof id !== 'string' && typeof id !== 'number') return;
     const reply = (response: ApiResponse): void => {
@@ -340,6 +412,14 @@ export class RemoteGateway {
         });
       }
     };
+
+    if (session.version.compat === 'phone_outdated' || session.version.compat === 'pc_outdated') {
+      reply({
+        status: 409,
+        json: { error: { code: 'incompatible', message: '两端版本不兼容，请更新后再试' } },
+      });
+      return;
+    }
 
     const method = m['method'];
     const rawPath = m['path'];

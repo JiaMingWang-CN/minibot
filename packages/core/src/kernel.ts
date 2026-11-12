@@ -507,6 +507,11 @@ export class Kernel {
     return listPresets();
   }
 
+  /** 应用版本号（桌面端传入 app.getVersion()，未传时为空串） */
+  version(): string {
+    return this.appVersion ?? '';
+  }
+
   async addProvider(i: AddProviderInput): Promise<Provider> {
     if (typeof i.name !== 'string' || i.name.trim().length === 0) {
       throw new KernelError('invalid', '供应商名称不能为空');
