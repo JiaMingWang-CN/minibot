@@ -1,5 +1,6 @@
 package app.minibot.mobile.remote
 
+import app.minibot.mobile.BuildConfig
 import app.minibot.mobile.diag.Diag
 import app.minibot.mobile.diag.DiagEvent
 import app.minibot.mobile.diag.LogLevel
@@ -32,6 +33,13 @@ sealed class ConnectionState {
 }
 
 class PairingFailedException(message: String) : Exception(message)
+
+/** 远程协议版本：消息格式有不兼容改动时 +1 */
+const val REMOTE_PROTOCOL = 1
+/** 电脑端要求的最低手机协议（随 version 的 minPeer 发出） */
+const val MIN_PHONE_PROTOCOL = 1
+/** 手机端要求的最低电脑协议（我们发出的 minPeer） */
+const val MIN_PC_PROTOCOL = 1
 
 const val HANDSHAKE_TIMEOUT_MS = 10_000L
 const val LAN_RACE_MS = 1_500L
@@ -84,6 +92,10 @@ class Connector(
 
     /** 电脑发来的应用消息（不含配对确认） */
     @Volatile var onMessage: (JSONObject) -> Unit = {}
+
+    /** 与电脑的协议兼容状态：从未报告版本（旧版电脑）时保持 unknown */
+    @Volatile var compat: String = "unknown"
+        private set
 
     @Volatile private var activeChannel: SecureChannel? = null
     private val links = CopyOnWriteArrayList<Link>()
@@ -342,13 +354,27 @@ class Connector(
         link.channel = channel
         channel.onClose = { link.events.trySend(Ev.Closed(CloseReason.Network("信道已关闭"))) }
         channel.onMessage = { message ->
-            if (message.optString("t") == "paired") link.events.trySend(Ev.Paired)
-            else {
-                // 配对中的地址刚从配对码里拿到，不需要再更新
-                if (!pairing && message.optString("t") == "ready") applyReady(message)
-                onMessage(message)
+            when (message.optString("t")) {
+                "paired" -> link.events.trySend(Ev.Paired)
+                "version" -> handlePeerVersion(message)
+                else -> {
+                    // 配对中的地址刚从配对码里拿到，不需要再更新
+                    if (!pairing && message.optString("t") == "ready") {
+                        applyReady(message)
+                        // ready 之后紧接着告知协议版本；旧版电脑不认识会忽略
+                        channel.send(
+                            JSONObject()
+                                .put("t", "version")
+                                .put("app", BuildConfig.VERSION_NAME)
+                                .put("protocol", REMOTE_PROTOCOL)
+                                .put("minPeer", MIN_PC_PROTOCOL),
+                        )
+                    }
+                    onMessage(message)
+                }
             }
         }
+        compat = "unknown"
         link.events.trySend(Ev.Ready)
     }
 
@@ -370,6 +396,30 @@ class Connector(
             // 下次 ready 再更新
         } catch (e: JSONException) {
             // 格式不对就当没带
+        }
+    }
+
+    /** 电脑的 version：协议号不兼容时记录 compat，界面据此提示更新 */
+    private fun handlePeerVersion(message: JSONObject) {
+        val protocol = message.optInt("protocol", 1)
+        val minPeer = message.optInt("minPeer", 1)
+        val app = message.optString("app").take(64)
+        compat = when {
+            protocol < MIN_PC_PROTOCOL -> "pc_outdated"
+            REMOTE_PROTOCOL < minPeer -> "phone_outdated"
+            else -> "ok"
+        }
+        if (compat == "ok") {
+            Diag.write(LogLevel.INFO, "remote", "version.ok", mapOf("app" to app, "pcProtocol" to protocol))
+        } else {
+            Diag.write(
+                LogLevel.WARN, "remote", "version.mismatch",
+                mapOf("result" to compat, "pcProtocol" to protocol, "pcApp" to app, "phoneProtocol" to REMOTE_PROTOCOL),
+                DiagEvent(
+                    "error", "remote.version_mismatch",
+                    mapOf("result" to compat, "pcProtocol" to protocol, "phoneProtocol" to REMOTE_PROTOCOL),
+                ),
+            )
         }
     }
 

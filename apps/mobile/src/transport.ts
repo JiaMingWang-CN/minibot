@@ -10,11 +10,53 @@ function base64ToBytes(b64: string): Uint8Array {
   return out;
 }
 
+/**
+ * 诊断与反馈由原生层直接处理（不经电脑端）：配对 / 连接失败时恰恰也要能提交。
+ * 返回 null 表示不是这些本机路径。
+ */
+async function localRequest(method: string, path: string, body: unknown): Promise<UnknownBody | null> {
+  const input = (body ?? {}) as Record<string, unknown>;
+  if (method === 'GET' && path === '/api/diagnostics') {
+    return { status: 200, json: await MinibotRemote.getDiagnostics() };
+  }
+  if (method === 'PUT' && path === '/api/diagnostics') {
+    const consent = input['consent'];
+    if (consent !== 'on' && consent !== 'off') {
+      return { status: 400, json: { error: { code: 'invalid', message: 'consent 必须是 on 或 off' } } };
+    }
+    await MinibotRemote.setDiagnostics({ consent });
+    return { status: 200, json: { ok: true } };
+  }
+  if (method === 'GET' && path === '/api/diagnostics/logs-preview') {
+    return { status: 200, json: await MinibotRemote.logsPreview() };
+  }
+  if (method === 'POST' && path === '/api/feedback') {
+    await MinibotRemote.sendFeedback({
+      description: String(input['description'] ?? ''),
+      ...(typeof input['contact'] === 'string' ? { contact: input['contact'] } : {}),
+      attachLogs: input['attachLogs'] === true,
+    });
+    return { status: 200, json: { ok: true } };
+  }
+  if (method === 'POST' && path === '/api/diagnostics/client-error') {
+    await MinibotRemote.reportClientError({
+      message: String(input['message'] ?? ''),
+      ...(typeof input['stack'] === 'string' ? { stack: input['stack'] } : {}),
+    });
+    return { status: 200, json: { ok: true } };
+  }
+  return null;
+}
+
+type UnknownBody = { status: number; json?: unknown; bytes?: Uint8Array; contentType?: string };
+
 /** 请求经原生桥接 → 加密连接 → 电脑端白名单 */
 export function nativeTransport(): Transport {
   return {
     async request(method, path, body) {
       try {
+        const local = await localRequest(method, path, body);
+        if (local !== null) return local;
         const res = await MinibotRemote.request({ method, path, ...(body !== undefined ? { body } : {}) });
         return {
           status: res.status,

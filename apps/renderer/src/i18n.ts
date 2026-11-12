@@ -437,6 +437,16 @@ const zhCN = {
   'mobile.settings.unpairTitle': '取消配对？',
   'mobile.settings.unpairBody': '取消后需要在电脑端重新配对才能再连接。',
   'mobile.settings.close': '关闭',
+  'mobile.settings.version': '版本 {version}',
+  'mobile.settings.diagOn': '已开启，出错时自动发送',
+  'mobile.settings.diagOff': '已关闭',
+  'update.available': '发现新版本 {version}',
+  'update.install': '更新',
+  'update.later': '稍后',
+  'update.downloading': '正在下载 {percent}%',
+  'update.failed': '下载失败，请稍后重试',
+  'update.permission': '请允许 minibot 安装应用',
+  'update.notesEmpty': '这个版本没有更新说明。',
 } as const;
 
 export type MessageKey = keyof typeof zhCN;

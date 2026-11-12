@@ -6,7 +6,8 @@ import { cn } from '@renderer/lib/cn';
 import { t } from '@renderer/i18n';
 import { useConversation } from '@renderer/main/useConversation';
 import { ThreadDialogs } from '@renderer/main/ThreadDialogs';
-import { PILL_SECONDARY } from '@renderer/ui/recipes';
+import { Dialog } from '@renderer/ui/Dialog';
+import { PILL_PRIMARY, PILL_SECONDARY } from '@renderer/ui/recipes';
 import { ApprovalBar } from './ApprovalBar';
 import { MinibotRemote } from './native';
 import { PairScreen } from './screens/PairScreen';
@@ -14,6 +15,7 @@ import { ConversationScreen } from './screens/ConversationScreen';
 import { SettingsSheet, viaText } from './screens/SettingsSheet';
 import { ThreadListScreen } from './screens/ThreadListScreen';
 import { nativeEvents, nativeTransport } from './transport';
+import { UpdatePrompt } from './UpdatePrompt';
 import { usePhoneStatus } from './usePhoneStatus';
 
 type Subscribe = (listener: (event: KernelEvent) => void) => () => void;
@@ -200,6 +202,10 @@ function BotView({ api, events, subscribe, bot, bots, onSelectBot, view, setView
 export function MobileApp() {
   const status = usePhoneStatus();
   const [boot, setBoot] = useState<Boot | null>(null);
+  const [update, setUpdate] = useState<{ version: string; notes: string } | null>(null);
+  const [updateNotice, setUpdateNotice] = useState<string | null>(null);
+  const [diagPrompt, setDiagPrompt] = useState(false);
+  const lastErrorAt = useRef(new Map<string, number>());
   const [view, setViewState] = useState<'list' | 'chat'>('list');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [guide, setGuide] = useState(false);
@@ -207,6 +213,56 @@ export function MobileApp() {
   const launchHandler = useRef<((threadId: string) => void) | null>(null);
   const pendingLaunch = useRef<string | null>(null);
   const paired = status?.paired ?? false;
+
+  // 启动时自动查一次更新（原生层每天最多一次），手动检查不受限
+  const checkUpdate = useCallback(async (manual: boolean): Promise<void> => {
+    try {
+      const result = await MinibotRemote.checkUpdate({ manual });
+      if (result.available && result.version !== undefined) {
+        setUpdate({ version: result.version, notes: result.notes ?? '' });
+        setUpdateNotice(null);
+      } else if (manual) {
+        setUpdateNotice(t('about.updateNone'));
+      }
+    } catch {
+      if (manual) setUpdateNotice(t('about.updateError'));
+    }
+  }, []);
+  useEffect(() => {
+    void checkUpdate(false);
+  }, [checkUpdate]);
+
+  // 首次打开且还没表态：显示与电脑端同样的说明
+  useEffect(() => {
+    void MinibotRemote.getDiagnostics().then(
+      (info) => setDiagPrompt(info.available && info.consent === 'unset'),
+      () => setDiagPrompt(false),
+    );
+  }, []);
+
+  // 网页层未捕获错误：同一 message 每分钟最多上报一次
+  useEffect(() => {
+    const report = (err: unknown, fallback: string): void => {
+      const message = err instanceof Error ? err.message || fallback : typeof err === 'string' ? err : fallback;
+      const now = Date.now();
+      const last = lastErrorAt.current.get(message);
+      if (last !== undefined && now - last < 60_000) return;
+      lastErrorAt.current.set(message, now);
+      if (lastErrorAt.current.size > 100) lastErrorAt.current.clear();
+      void MinibotRemote.reportClientError({
+        message,
+        ...(err instanceof Error && typeof err.stack === 'string' ? { stack: err.stack } : {}),
+      }).catch(() => {});
+    };
+    const onError = (event: ErrorEvent): void => report(event.error, event.message);
+    const onRejection = (event: PromiseRejectionEvent): void => report(event.reason, 'unhandledrejection');
+    window.addEventListener('error', onError);
+    window.addEventListener('unhandledrejection', onRejection);
+    return () => {
+      window.removeEventListener('error', onError);
+      window.removeEventListener('unhandledrejection', onRejection);
+    };
+  }, []);
 
   // 进入对话页压一层历史，安卓返回键回到列表
   const setView = useCallback((next: 'list' | 'chat') => {
@@ -257,23 +313,87 @@ export function MobileApp() {
     }
   }, []);
 
+  const overlays = (
+    <>
+      {diagPrompt && (
+        <Dialog
+          open
+          onClose={() => setDiagPrompt(false)}
+          title={t('diagnostics.prompt.title')}
+          footer={
+            <>
+              <button
+                type="button"
+                className={PILL_SECONDARY}
+                onClick={() => {
+                  setDiagPrompt(false);
+                  void MinibotRemote.setDiagnostics({ consent: 'off' }).catch(() => {});
+                }}>
+                {t('diagnostics.prompt.decline')}
+              </button>
+              <button
+                type="button"
+                className={PILL_PRIMARY}
+                onClick={() => {
+                  setDiagPrompt(false);
+                  void MinibotRemote.setDiagnostics({ consent: 'on' }).catch(() => {});
+                }}>
+                {t('diagnostics.prompt.accept')}
+              </button>
+            </>
+          }>
+          <div className="flex flex-col gap-2 text-[13px] leading-[19px] text-ink-secondary">
+            <p>{t('diagnostics.prompt.body')}</p>
+            <p>{t('diagnostics.allowed')}</p>
+            <p>{t('diagnostics.forbidden')}</p>
+          </div>
+        </Dialog>
+      )}
+      {update !== null && (
+        <UpdatePrompt version={update.version} notes={update.notes} onClose={() => setUpdate(null)} />
+      )}
+    </>
+  );
+
   if (status === null) return <div className="h-full bg-app" />;
   if (!paired || status.connection === 'revoked') {
     return (
-      <PairScreen
-        deviceModel={status.deviceModel}
-        revoked={status.connection === 'revoked'}
-        onPaired={() => {
-          setGuide(true);
-          setSettingsOpen(true);
-        }}
-      />
+      <>
+        <PairScreen
+          deviceModel={status.deviceModel}
+          revoked={status.connection === 'revoked'}
+          onPaired={() => {
+            setGuide(true);
+            setSettingsOpen(true);
+          }}
+        />
+        {overlays}
+      </>
     );
   }
 
   const down = status.connection !== 'lan' && status.connection !== 'relay';
+  const compatNotice =
+    status.compat === 'phone_outdated'
+      ? t('phone.compat.phone_outdated')
+      : status.compat === 'pc_outdated'
+        ? t('phone.compat.pc_outdated')
+        : null;
   return (
     <div className="safe-top flex h-full flex-col bg-app">
+      {compatNotice !== null && (
+        <div className="flex shrink-0 items-center gap-2 bg-warning/10 px-3 py-1.5 text-[12px] text-warning">
+          <span className="min-w-0 flex-1">{compatNotice}</span>
+          {status.compat === 'phone_outdated' && (
+            <button
+              type="button"
+              className="shrink-0 rounded-full px-2 py-0.5 font-medium hover:bg-warning/15"
+              onClick={() => void checkUpdate(true)}>
+              {t('about.update')}
+            </button>
+          )}
+        </div>
+      )}
       <button
         type="button"
         onClick={() => setSettingsOpen(true)}
@@ -293,12 +413,15 @@ export function MobileApp() {
         <SettingsSheet
           status={status}
           guide={guide}
+          updateNotice={updateNotice}
+          onCheckUpdate={() => void checkUpdate(true)}
           onClose={() => {
             setSettingsOpen(false);
             setGuide(false);
           }}
         />
       )}
+      {overlays}
     </div>
   );
 }

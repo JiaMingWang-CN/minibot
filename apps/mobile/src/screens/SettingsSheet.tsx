@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { t } from '@renderer/i18n';
 import { Dialog } from '@renderer/ui/Dialog';
 import { PILL_DANGER, PILL_SECONDARY } from '@renderer/ui/recipes';
-import { MinibotRemote, type PhoneStatus } from '../native';
+import { MinibotRemote, type DiagnosticsInfo, type PhoneStatus } from '../native';
+import { FeedbackSheet } from './FeedbackSheet';
 
 function Row({ title, body, action }: { title: string; body: string; action?: { label: string; onClick: () => void } }) {
   return (
@@ -38,8 +39,37 @@ export function viaText(status: PhoneStatus): string {
 }
 
 /** 顶部状态条点开：连接方式、通知权限、电池优化、后台连接、取消配对 */
-export function SettingsSheet({ status, guide, onClose }: { status: PhoneStatus; guide: boolean; onClose: () => void }) {
+export function SettingsSheet({
+  status,
+  guide,
+  updateNotice,
+  onCheckUpdate,
+  onClose,
+}: {
+  status: PhoneStatus;
+  guide: boolean;
+  /** 手动检查更新的结果提示（已是最新 / 失败），没有则为 null */
+  updateNotice: string | null;
+  onCheckUpdate: () => void;
+  onClose: () => void;
+}) {
   const [confirming, setConfirming] = useState(false);
+  const [diag, setDiag] = useState<DiagnosticsInfo | null>(null);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [feedbackSent, setFeedbackSent] = useState(false);
+
+  useEffect(() => {
+    void MinibotRemote.getDiagnostics().then(setDiag, () => setDiag(null));
+  }, []);
+
+  const toggleDiagnostics = (): void => {
+    if (diag === null) return;
+    const consent = diag.consent === 'on' ? 'off' : 'on';
+    void MinibotRemote.setDiagnostics({ consent }).then(
+      () => setDiag({ ...diag, consent }),
+      () => {},
+    );
+  };
   if (confirming) {
     return (
       <Dialog
@@ -97,7 +127,39 @@ export function SettingsSheet({ status, guide, onClose }: { status: PhoneStatus;
             onClick: () => void (status.background ? MinibotRemote.stopBackground() : MinibotRemote.startBackground()),
           }}
         />
+        <Row
+          title={t('mobile.settings.version', { version: diag?.appVersion ?? '' })}
+          body={updateNotice ?? t('about.updateHint')}
+          action={{ label: t('about.update'), onClick: onCheckUpdate }}
+        />
+        {diag?.available === true && (
+          <Row
+            title={t('about.diagnostics')}
+            body={diag.consent === 'on' ? t('mobile.settings.diagOn') : t('mobile.settings.diagOff')}
+            action={{
+              label: diag.consent === 'on' ? t('mobile.settings.diagOff') : t('mobile.settings.diagOn'),
+              onClick: toggleDiagnostics,
+            }}
+          />
+        )}
+        {diag?.available === true && (
+          <Row
+            title={t('about.feedback')}
+            body={feedbackSent ? t('feedback.ok') : t('about.feedbackHint')}
+            action={{ label: t('about.feedback'), onClick: () => setFeedbackOpen(true) }}
+          />
+        )}
       </div>
+      {feedbackOpen && (
+        <FeedbackSheet
+          open
+          onClose={() => setFeedbackOpen(false)}
+          onSent={() => {
+            setFeedbackOpen(false);
+            setFeedbackSent(true);
+          }}
+        />
+      )}
     </Dialog>
   );
 }

@@ -41,6 +41,8 @@ class ConnectorTest {
         val startOnline: Boolean = true,
         /** 电脑 ready 消息里额外带的字段（lan / port） */
         val readyExtra: Map<String, Any> = emptyMap(),
+        /** 电脑 ready 之后紧接着发的 version；为 null 表示旧版电脑（不发版本） */
+        val pcVersion: Map<String, Any>? = null,
     )
 
     /** 电脑一端：把手机发来的帧当作电脑网关来应答 */
@@ -64,6 +66,11 @@ class ConnectorTest {
             val ready = JSONObject().put("t", "ready").put("pcName", "测试电脑")
             for ((key, value) in phoneEnd.script.readyExtra) ready.put(key, value)
             channel.send(ready)
+            phoneEnd.script.pcVersion?.let { extra ->
+                val version = JSONObject().put("t", "version")
+                for ((key, value) in extra) version.put(key, value)
+                channel.send(version)
+            }
         }
     }
 
@@ -119,6 +126,7 @@ class ConnectorTest {
         private val relaySeq: List<Script> = emptyList(),
     ) : CarrierFactory {
         val lanCarriers = mutableListOf<ScriptedCarrier>()
+        val relayCarriers = mutableListOf<ScriptedCarrier>()
         var lanCreated = 0
         var relayCreated = 0
         val relayTimes = mutableListOf<Long>()
@@ -133,7 +141,7 @@ class ConnectorTest {
             relayCreated++
             relayTimes.add(now())
             val script = if (relaySeq.isEmpty()) relay ?: Script(null) else relaySeq[minOf(relayCreated - 1, relaySeq.size - 1)]
-            return ScriptedCarrier(script, scope, true)
+            return ScriptedCarrier(script, scope, true).also { relayCarriers.add(it) }
         }
     }
 
@@ -223,7 +231,7 @@ class ConnectorTest {
         // 消息必须落到仍然打开的那条承载上，而不是被关掉的落选者
         val live = factory.lanCarriers.filter { !it.closed }
         assertEquals(1, live.size)
-        assertEquals("1", live.single().pcEnd.received.single().getString("id"))
+        assertEquals("1", live.single().pcEnd.received.first { it.optString("t") == "req" }.getString("id"))
     }
 
     @Test
@@ -246,6 +254,45 @@ class ConnectorTest {
         advanceTimeBy(100)
         // PcEnd 在握手完成后立刻发了 ready：与握手最后一帧几乎同时到达，不能丢
         assertEquals("ready", got.single().getString("t"))
+    }
+
+    @Test
+    fun sendsVersionAfterReady() = runTest {
+        val factory = Factory(backgroundScope, relay = Script(0))
+        val c = connector(pairing(relay = "wss://r/v1"), factory)
+        c.start()
+        advanceTimeBy(200)
+        val received = factory.relayCarriers.single().pcEnd.received
+        val version = received.first { it.optString("t") == "version" }
+        assertEquals(REMOTE_PROTOCOL, version.getInt("protocol"))
+        assertEquals(MIN_PC_PROTOCOL, version.getInt("minPeer"))
+    }
+
+    @Test
+    fun pcOutdated() = runTest {
+        val factory = Factory(backgroundScope, relay = Script(0, pcVersion = mapOf("app" to "0.0.9", "protocol" to 0, "minPeer" to 1)))
+        val c = connector(pairing(relay = "wss://r/v1"), factory)
+        c.start()
+        advanceTimeBy(200)
+        assertEquals("pc_outdated", c.compat)
+    }
+
+    @Test
+    fun phoneOutdated() = runTest {
+        val factory = Factory(backgroundScope, relay = Script(0, pcVersion = mapOf("app" to "0.2.0", "protocol" to 1, "minPeer" to 2)))
+        val c = connector(pairing(relay = "wss://r/v1"), factory)
+        c.start()
+        advanceTimeBy(200)
+        assertEquals("phone_outdated", c.compat)
+    }
+
+    @Test
+    fun compatibleVersionIsOk() = runTest {
+        val factory = Factory(backgroundScope, relay = Script(0, pcVersion = mapOf("app" to "0.2.0", "protocol" to 1, "minPeer" to 1)))
+        val c = connector(pairing(relay = "wss://r/v1"), factory)
+        c.start()
+        advanceTimeBy(200)
+        assertEquals("ok", c.compat)
     }
 
     @Test

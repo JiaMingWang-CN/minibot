@@ -11,6 +11,7 @@ import app.minibot.mobile.diag.FeedbackException
 import app.minibot.mobile.remote.PairingCodeException
 import app.minibot.mobile.remote.PairingFailedException
 import app.minibot.mobile.remote.parsePairingCode
+import app.minibot.mobile.update.UpdateException
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
@@ -21,6 +22,7 @@ import com.getcapacitor.annotation.Permission
 import com.getcapacitor.annotation.PermissionCallback
 import com.journeyapps.barcodescanner.ScanOptions
 import com.journeyapps.barcodescanner.ScanContract
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import org.json.JSONObject
@@ -54,6 +56,10 @@ class MinibotRemotePlugin : Plugin(), HubSink {
     override fun status() = notifyListeners("status", JSObject(RemoteHub.statusJson().toString()))
 
     override fun openThread(threadId: String) = notifyListeners("openThread", JSObject().put("threadId", threadId))
+
+    override fun updateProgress(percent: Int) = notifyListeners("updateProgress", JSObject().put("percent", percent))
+
+    override fun updateError(message: String) = notifyListeners("updateError", JSObject().put("message", message))
 
     // —— 网页 → 原生 ——
 
@@ -265,6 +271,58 @@ class MinibotRemotePlugin : Plugin(), HubSink {
         RemoteHub.hubScope.launch(Dispatchers.IO) {
             Diag.reportClientError(message, stack)
             call.resolve()
+        }
+    }
+
+    // —— 应用内更新 ——
+
+    @PluginMethod
+    fun checkUpdate(call: PluginCall) {
+        val manual = call.getBoolean("manual") ?: false
+        RemoteHub.hubScope.launch(Dispatchers.IO) {
+            try {
+                val update = RemoteHub.updater.check(manual)
+                val out = JSObject().put("available", update != null)
+                if (update != null) {
+                    out.put("version", update.version)
+                    out.put("notes", update.notes)
+                }
+                call.resolve(out)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: UpdateException) {
+                call.reject(e.message ?: "检查更新失败", e.kind)
+            } catch (e: Exception) {
+                call.reject(e.message ?: "检查更新失败", "error")
+            }
+        }
+    }
+
+    @PluginMethod
+    fun downloadAndInstall(call: PluginCall) {
+        if (Build.VERSION.SDK_INT >= 26 && !context.packageManager.canRequestPackageInstalls()) {
+            try {
+                activity.startActivity(
+                    Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + context.packageName)),
+                )
+            } catch (e: Exception) {
+                // 打不开设置时仍然回错误，由界面提示
+            }
+            return call.reject("请允许 minibot 安装应用", "install_permission")
+        }
+        RemoteHub.hubScope.launch(Dispatchers.IO) {
+            try {
+                RemoteHub.updater.downloadAndInstall()
+                call.resolve()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: UpdateException) {
+                updateError(e.message ?: "更新失败")
+                call.reject(e.message ?: "更新失败", e.kind)
+            } catch (e: Exception) {
+                updateError(e.message ?: "更新失败")
+                call.reject(e.message ?: "更新失败", "error")
+            }
         }
     }
 

@@ -1,12 +1,14 @@
 package app.minibot.mobile
 
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
 import android.net.ConnectivityManager
 import android.net.Network
 import android.os.Build
 import android.os.PowerManager
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.FileProvider
 import app.minibot.mobile.diag.Diag
 import app.minibot.mobile.remote.ConnectionState
 import app.minibot.mobile.remote.Connector
@@ -15,6 +17,8 @@ import app.minibot.mobile.remote.OkHttpCarrierFactory
 import app.minibot.mobile.remote.PairingStore
 import app.minibot.mobile.remote.StoreUnavailableException
 import app.minibot.mobile.remote.Via
+import app.minibot.mobile.update.Updater
+import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CompletableDeferred
@@ -39,6 +43,8 @@ interface HubSink {
     fun ready(pcName: String)
     fun status()
     fun openThread(threadId: String)
+    fun updateProgress(percent: Int)
+    fun updateError(message: String)
 }
 
 /** 进程内唯一的远程连接中枢：Connector + 请求应答 + 通知；前台服务只负责让进程活着 */
@@ -52,6 +58,8 @@ object RemoteHub {
     lateinit var connector: Connector
         private set
     lateinit var poster: AndroidPoster
+        private set
+    lateinit var updater: Updater
         private set
     private lateinit var notifier: Notifier
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -89,6 +97,14 @@ object RemoteHub {
             // 存储暂时读不出时下次连接再登记
         }
         poster = AndroidPoster(appContext)
+        updater = Updater(
+            updateDir = File(appContext.cacheDir, "update"),
+            currentVersionCode = BuildConfig.VERSION_CODE,
+            lastCheckAt = { prefs.getLong("updateCheckedAt", 0L) },
+            saveLastCheckAt = { prefs.edit().putLong("updateCheckedAt", it).apply() },
+            onProgress = { percent -> sink?.updateProgress(percent) },
+            installer = { file -> installUpdate(file) },
+        )
         connector = Connector(scope, store, OkHttpCarrierFactory())
         connector.onMessage = { message ->
             // 应答直接交给等待者：处理事件时可能要发请求并等应答，放进同一队列会互相等死
@@ -257,6 +273,7 @@ object RemoteHub {
             .put("pcName", pcName ?: JSONObject.NULL)
             .put("connection", connection)
             .put("error", error ?: JSONObject.NULL)
+            .put("compat", connector.compat)
             .put("background", background)
             .put("notificationsAllowed", NotificationManagerCompat.from(appContext).areNotificationsEnabled())
             .put("batteryOptimized", !power.isIgnoringBatteryOptimizations(appContext.packageName))
@@ -273,6 +290,15 @@ object RemoteHub {
             ConnectionState.Idle -> appContext.getString(R.string.conn_idle)
             else -> appContext.getString(R.string.conn_reconnecting)
         }
+    }
+
+    /** 校验过的 APK 交给系统安装器（FileProvider 只暴露缓存目录） */
+    private fun installUpdate(file: File) {
+        val uri = FileProvider.getUriForFile(appContext, appContext.packageName + ".fileprovider", file)
+        val intent = Intent(Intent.ACTION_VIEW)
+            .setDataAndType(uri, "application/vnd.android.package-archive")
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        appContext.startActivity(intent)
     }
 
     fun openThread(threadId: String) {
