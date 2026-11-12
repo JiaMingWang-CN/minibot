@@ -8,6 +8,8 @@ export const FRAME_DATA = 0x03;
 export const CHUNK_DATA_BYTES = 65518;
 /** 拼回后的应用消息上限（36 MiB，覆盖发消息接口的 32 MB） */
 export const MAX_APP_MESSAGE_BYTES = 37748736;
+/** 承载发送缓冲积压超过这么多还没发出去，说明对端太慢或链路卡住：断开会话，手机重连后重新同步 */
+export const MAX_SEND_BACKLOG_BYTES = 16 * 1024 * 1024;
 
 const FLAG_MORE = 0;
 const FLAG_LAST = 1;
@@ -18,6 +20,8 @@ export interface Carrier {
   onFrame(cb: (frame: Buffer) => void): void;
   onClose(cb: () => void): void;
   close(): void;
+  /** 已交给承载但还没真正发出去的字节数；不提供视为 0 */
+  bufferedAmount?(): number;
 }
 
 export class SecureChannel {
@@ -40,6 +44,10 @@ export class SecureChannel {
 
   send(message: unknown): void {
     if (this.closed) return;
+    if ((this.carrier.bufferedAmount?.() ?? 0) > MAX_SEND_BACKLOG_BYTES) {
+      this.close();
+      return;
+    }
     const data = Buffer.from(JSON.stringify(message), 'utf8');
     let offset = 0;
     do {

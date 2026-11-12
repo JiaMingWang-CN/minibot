@@ -25,7 +25,10 @@ interface SessionCarrier extends Carrier {
   remoteClosed(): void;
 }
 
-function makeCarrier(sessionId: string, link: { send: (frame: Buffer) => void; closeSession: (id: string) => void }): SessionCarrier {
+function makeCarrier(
+  sessionId: string,
+  link: { send: (frame: Buffer) => void; closeSession: (id: string) => void; bufferedAmount: () => number },
+): SessionCarrier {
   const idBytes = Buffer.from(sessionId, 'hex');
   let frameCb: ((frame: Buffer) => void) | null = null;
   const closeCbs: (() => void)[] = [];
@@ -50,6 +53,8 @@ function makeCarrier(sessionId: string, link: { send: (frame: Buffer) => void; c
       link.closeSession(sessionId);
       finish();
     },
+    // 所有手机会话共用一条到中继的连接，积压按整条连接算
+    bufferedAmount: link.bufferedAmount,
     deliver: (frame) => {
       if (!closed) frameCb?.(frame);
     },
@@ -162,6 +167,7 @@ export class RelayLink {
           send: (frame) => {
             if (ws.readyState === ws.OPEN) ws.send(frame, { binary: true });
           },
+          bufferedAmount: () => ws.bufferedAmount,
           closeSession: (id) => {
             this.sessions.delete(id);
             if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'session_close', sessionId: id }));

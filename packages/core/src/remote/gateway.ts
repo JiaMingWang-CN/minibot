@@ -240,8 +240,13 @@ export class RemoteGateway {
           .addDevice(deviceName, remote)
           .then(() => {
             if (!carrierClosed) finish(device, deviceIdOf(remote), deviceName);
+            // 手机已经断开：设备已保存、邀请已作废，仍要让界面知道
+            else this.notify();
           })
-          .catch(() => carrier.close());
+          .catch(() => {
+            this.notify();
+            carrier.close();
+          });
         finished = true;
       } catch {
         fail();

@@ -101,3 +101,16 @@ test('store touch 节流落盘', async () => {
   const later = JSON.parse(await fs.readFile(paths.devicesJson, 'utf8')) as { lastVia: string }[];
   assert.equal(later[0]!.lastVia, 'relay');
 });
+
+test('store 首次保存密钥失败：不抛出，手机功能不可用', async () => {
+  const { paths } = await tmp();
+  const failing: KeyCrypto = {
+    ...fakeCrypto(),
+    encrypt: () => {
+      throw new Error('safeStorage 不可用');
+    },
+  };
+  const s = await RemoteStore.open({ paths, crypto: failing });
+  assert.equal(s.available(), false);
+  assert.throws(() => s.identity());
+});

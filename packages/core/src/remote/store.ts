@@ -149,7 +149,13 @@ export class RemoteStore {
         publicKey: pair.publicKey.toString('base64url'),
         relayToken: null,
       };
-      await this.writeKey();
+      try {
+        await this.writeKey();
+      } catch {
+        // 加密或写盘失败：私钥没存下来就不能用（每次启动换身份会让已配对手机全部失效）
+        this.keyFile = null;
+        this.usable = false;
+      }
       return;
     }
     try {

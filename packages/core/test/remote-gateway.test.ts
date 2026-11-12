@@ -4,7 +4,8 @@ import { dataPaths } from '../src/paths.ts';
 import { RemoteGateway } from '../src/remote/gateway.ts';
 import { RemoteStore } from '../src/remote/store.ts';
 import { parsePairingCode } from '../src/remote/pairing.ts';
-import { generateKeyPair } from '../src/remote/noise.ts';
+import { createHandshake, generateKeyPair } from '../src/remote/noise.ts';
+import { FRAME_PAIR } from '../src/remote/channel.ts';
 import { carrierPair, type MemoryCarrier } from './carrier-pair.ts';
 import { TestPhone } from './remote-phone.ts';
 import { fakeCrypto, kernelHarness, textModel, waitFor, waitIdle, type KernelHarness } from './kernel-harness.ts';
@@ -227,3 +228,22 @@ test('gateway 密钥库不可用', async () => {
     await h.close();
   }
 });
+
+test('gateway 配对完成瞬间手机断开：仍通知界面', () =>
+  withSetup(async (s) => {
+    const offer = s.gateway.startPairing({ lanAddresses: [] });
+    let notified = 0;
+    s.gateway.on(() => (notified += 1));
+    const info = parsePairingCode(offer.code);
+    const hs = createHandshake({ pattern: 'XXpsk3', initiator: true, s: generateKeyPair(), psk: Buffer.from(info.psk, 'base64url') });
+    const { a, b } = carrierPair();
+    const reply = new Promise<Buffer>((resolve) => b.onFrame(resolve));
+    s.gateway.accept(a, 'lan');
+    b.send(Buffer.concat([Buffer.from([FRAME_PAIR]), hs.writeMessage(Buffer.alloc(0))]));
+    hs.readMessage((await reply).subarray(1));
+    b.send(Buffer.concat([Buffer.from([FRAME_PAIR]), hs.writeMessage(Buffer.from('{"deviceName":"甲"}'))]));
+    b.close();
+    await waitFor(() => s.store.devices().length === 1);
+    await waitFor(() => notified > 0);
+    assert.equal(s.gateway.pairing(), null);
+  }));

@@ -102,5 +102,6 @@ function wsCarrier(ws: WebSocket): Carrier {
       closeCbs.push(cb);
     },
     close: () => ws.close(),
+    bufferedAmount: () => ws.bufferedAmount,
   };
 }

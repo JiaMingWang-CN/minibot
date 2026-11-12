@@ -34,7 +34,12 @@ async function bootstrap(): Promise<void> {
   const crypto = cryptoModule.electronCrypto();
   kernel = await Kernel.open({ dataRoot, crypto });
   // 手机功能的任何问题（没有密钥库、端口被占用…）只体现在“手机”设置页，不影响内核与本机界面
-  remote = await RemoteService.start(kernel, { dataRoot, crypto });
+  try {
+    remote = await RemoteService.start(kernel, { dataRoot, crypto });
+  } catch (err) {
+    console.error('手机功能启动失败', err);
+    remote = undefined;
+  }
   server = await startServer(kernel, { staticDir, remote });
 
   // 只接受本应用主窗口、且页面来自本机服务的调用

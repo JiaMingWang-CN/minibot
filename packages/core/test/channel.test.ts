@@ -84,3 +84,18 @@ test('channel 重放', async () => {
   await waitFor(() => closed);
   assert.equal(got.length, 1);
 });
+
+test('channel 积压', async () => {
+  const { a, left } = channels();
+  let backlog = 0;
+  (a as { bufferedAmount?: () => number }).bufferedAmount = () => backlog;
+  let closed = false;
+  left.onClose(() => (closed = true));
+  left.send({ a: 1 });
+  assert.equal(closed, false);
+  const sent = a.sent.length;
+  backlog = 64 * 1024 * 1024;
+  left.send({ a: 2 });
+  assert.equal(closed, true);
+  assert.equal(a.sent.length, sent);
+});
