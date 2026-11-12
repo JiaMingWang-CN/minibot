@@ -14,6 +14,8 @@
 
 - 前置：计划一全部任务已完成并通过。
 - 协议常量与计划一一致：Noise 协议名 `Noise_XXpsk3_25519_ChaChaPoly_SHA256` / `Noise_KK_25519_ChaChaPoly_SHA256`，prologue `minibot-remote/1`，帧类型 `0x01` / `0x02` / `0x03`，分块数据上限 `65518` 字节，拼接上限 `37748736` 字节，中继路径 `/v1`，配对码前缀 `minibot-pair:`。
+- 握手帧格式以计划一 Task 5 为准：配对三条消息都是 `[0x01][Noise 消息]`；日常连接首帧 `[0x02][16 字节 deviceId][msg1]`，电脑回 `[0x02][msg2]`。电脑回完最后一条握手消息后会立刻发 `ready`，两帧可能同时到达：承载换处理函数（握手 → 加密信道）时必须缓冲，不能丢帧。
+- 中继协议里手机一侧不变（`hello` 只带 `role: "phone"`、`routeId`、`token`）；电脑一侧的身份证明（`challenge` / `proof`）与手机无关。
 - 所有 npm 与 Gradle 依赖锁定精确版本；Capacitor 取实现时的最新稳定大版本，三个包版本完全一致。不引入 Google Play 服务、Firebase、ML Kit 或任何第三方推送。
 - `minSdk 26`、`targetSdk 35`；Kotlin 与 JDK 版本按所选 Capacitor 大版本的要求。
 - 手机端不复制粘贴桌面端文件，只通过 import 复用；复用不了的才在 `apps/mobile` 新写。

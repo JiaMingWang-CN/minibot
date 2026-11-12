@@ -14,6 +14,7 @@
 - 设计 6.1 的"单帧上限 8 MB"改为：应用消息先切成 Noise 传输消息（每块 ≤ 65535 字节），中继只转发小块，帧上限 `67584` 字节；接收端拼回后的应用消息上限 `37748736` 字节（36 MiB，覆盖发消息接口的 32 MB）。
 - 设计 6.1 的"手机随机生成 sessionId"改为由中继生成，手机无法伪造。
 - 设计 6.4 的"远程操作在日志里标记设备名"：项目目前没有通用日志，本计划只记录设备的最后在线时间与方式，不新建日志设施。
+- 实施中追加（代码审核后）：电脑在中继注册时须用长期私钥回答一次性挑战（Task 3、Task 6）；二维码颜色用专用 token `qr-paper` / `qr-ink`，深浅色都是黑码白底（Task 7）。详见文末"实施记录"。
 
 ## Global Constraints
 
@@ -72,10 +73,10 @@
 - `allowlist 多段`：`GET /api/threads/a/b/messages` → `false`。
 - `state 不含 Key`：配置了带 Key 的供应商后，`dispatchApi` 的 `/api/state` 结果序列化文本不含该 Key 原文。
 
-- [ ] **Step 1:** 写 **验收** 中的测试；运行 `npm test` — 新测试 FAIL。
-- [ ] **Step 2:** 按 **思路** 与 **约束** 实现。
-- [ ] **Step 3:** 运行 `npm test && npm run lint` — PASS。
-- [ ] **Step 4:** 提交。
+- [x] **Step 1:** 写 **验收** 中的测试；运行 `npm test` — 新测试 FAIL。
+- [x] **Step 2:** 按 **思路** 与 **约束** 实现。
+- [x] **Step 3:** 运行 `npm test && npm run lint` — PASS。
+- [x] **Step 4:** 提交。
 
 ### Task 2：Noise 握手与分块加密信道
 
@@ -92,7 +93,7 @@
   - `createHandshake(o: { pattern: NoisePattern; initiator: boolean; s: KeyPair; rs?: Buffer; psk?: Buffer; e?: KeyPair }): Handshake`（`e` 仅供测试向量注入）
   - `interface Handshake { writeMessage(payload: Buffer): Buffer; readMessage(message: Buffer): Buffer; isComplete(): boolean; remoteStatic(): Buffer | null; handshakeHash(): Buffer; split(): { send: CipherState; recv: CipherState } }`
   - `interface CipherState { encrypt(plain: Buffer): Buffer; decrypt(cipher: Buffer): Buffer }`
-  - `interface Carrier { send(frame: Buffer): void; onFrame(cb: (frame: Buffer) => void): void; onClose(cb: () => void): void; close(): void }`
+  - `interface Carrier { send(frame: Buffer): void; onFrame(cb: (frame: Buffer) => void): void; onClose(cb: () => void): void; close(): void; bufferedAmount?(): number }`（`onFrame` 是设置处理函数，后设的覆盖先设的；`bufferedAmount` 为已交给承载、尚未发出的字节数）
   - `class SecureChannel { constructor(carrier: Carrier, send: CipherState, recv: CipherState); send(message: unknown): void; onMessage(cb: (message: unknown) => void): void; onClose(cb: () => void): void; close(): void }`
   - 线上帧类型常量：`FRAME_PAIR = 0x01`、`FRAME_KK = 0x02`、`FRAME_DATA = 0x03`
 
@@ -105,6 +106,7 @@
 - 单个 Noise 传输消息密文 ≤ `65535` 字节。
 - 拼接中的应用消息累计超过 `37748736` 字节 → 关闭信道。
 - 任一块解密失败、帧类型不是 `FRAME_DATA`、JSON 解析失败 → 关闭信道，不回调。
+- 发送前承载积压（`bufferedAmount`）超过 `16777216` 字节 → 关闭信道（对端太慢或链路卡住；手机重连后重新同步）。
 - 测试向量取自 cacophony（`https://github.com/haskell-cryptography/cacophony` 的 `vectors/cacophony.txt`），只摘出上面两种协议名的条目存成 fixture。
 
 **验收:**
@@ -116,11 +118,12 @@
 - `channel 超限`：接收方累计超过 `37748736` 字节 → 信道关闭、无回调。
 - `channel 篡改`：翻转一个密文字节 → 接收方关闭信道。
 - `channel 重放`：同一帧投递两次 → 第二次导致关闭。
+- `channel 积压`：承载积压超过上限时再发送 → 信道关闭、不再发帧。
 
-- [ ] **Step 1:** 摘出测试向量 fixture；写 **验收** 测试；运行 `npm test` — FAIL。
-- [ ] **Step 2:** 按 **思路** 与 **约束** 实现。
-- [ ] **Step 3:** 运行 `npm test && npm run lint` — PASS。
-- [ ] **Step 4:** 提交。
+- [x] **Step 1:** 摘出测试向量 fixture；写 **验收** 测试；运行 `npm test` — FAIL。
+- [x] **Step 2:** 按 **思路** 与 **约束** 实现。
+- [x] **Step 3:** 运行 `npm test && npm run lint` — PASS。
+- [x] **Step 4:** 提交。
 
 ### Task 3：中继程序 `packages/relay`
 
@@ -131,22 +134,24 @@
 
 **Interfaces:**
 - Produces:
-  - `startRelay(o: { host: string; port: number; token: string; now?: () => number }): Promise<{ port: number; close(): Promise<void> }>`
-  - 中继协议（文本帧 JSON）：客户端 → 中继 `{"type":"hello","role":"pc"|"phone","routeId":"<32位hex>","token":"…"}`；中继 → 客户端 `{"type":"welcome"}`；中继 → 手机 `{"type":"pc_online"}` / `{"type":"pc_offline"}`；中继 → 电脑 `{"type":"session_open","sessionId":"<32位hex>"}` / `{"type":"session_close","sessionId":"…"}`；电脑 → 中继 `{"type":"session_close","sessionId":"…"}`。
+  - `startRelay(o: { host: string; port: number; token: string; now?: () => number; log?: (message: string) => void; helloTimeoutMs?: number; trustProxy?: boolean }): Promise<{ port: number; close(): Promise<void> }>`
+  - `pcProof(shared: Buffer, nonce: Buffer, routeId: string): Buffer`
+  - 中继协议（文本帧 JSON）：客户端 → 中继 `{"type":"hello","role":"pc"|"phone","routeId":"<32位hex>","token":"…"}`，电脑另带 `"pk":"<base64url 公钥>"`；中继 → 电脑 `{"type":"challenge","epk":"<base64url 一次性 X25519 公钥>","nonce":"<base64url 32 字节>"}`；电脑 → 中继 `{"type":"proof","proof":"<base64url>"}`，`proof = HMAC-SHA256(SHA-256("minibot-relay-auth/1" ‖ X25519(电脑私钥, epk)), nonce ‖ routeId 原始 16 字节)`；中继 → 客户端 `{"type":"welcome"}`；中继 → 手机 `{"type":"pc_online"}` / `{"type":"pc_offline"}`；中继 → 电脑 `{"type":"session_open","sessionId":"<32位hex>"}` / `{"type":"session_close","sessionId":"…"}`；电脑 → 中继 `{"type":"session_close","sessionId":"…"}`。
   - 二进制帧：电脑侧每帧前 16 字节为 sessionId 原始字节，其后为负载；手机侧只有负载。
 
 **思路:**
 - 一个 `WebSocketServer`，路径 `/v1`。首条消息必须是 `hello`，`token` 用常量时间比较。
+- 电脑 `hello` 通过口令校验后：`routeId` 必须等于 `SHA-256(pk)` 前 16 字节，否则 `4403`；随后发 `challenge`，核对 `proof`（常量时间比较）通过才进入下面的注册流程。口令写在配对二维码里，只挡没有口令的人；能否以电脑身份注册只看私钥。
 - 每个 `routeId` 一条记录：当前电脑连接 + 若干手机会话（sessionId → 手机连接）。手机接入时由中继生成 sessionId；电脑在线则向电脑发 `session_open` 并给手机发 `pc_online`，否则给手机发 `pc_offline` 并保留等待。
 - 电脑注册时：若已有旧电脑连接，以 `4409` 关闭旧连接；对所有等待中的手机逐个发 `session_open` 与 `pc_online`。电脑断开：对所有手机发 `pc_offline`，保留手机连接。
 - 转发只拼接 / 剥离 sessionId 前缀，不解析负载。
-- `main.ts` 从环境变量读 `RELAY_HOST`（默认 `127.0.0.1`）、`RELAY_PORT`（默认 `8787`）、`RELAY_TOKEN`（必填）。
+- `main.ts` 从环境变量读 `RELAY_HOST`（默认 `127.0.0.1`）、`RELAY_PORT`（默认 `8787`）、`RELAY_TOKEN`（必填）、`RELAY_TRUST_PROXY`（设为 `1` 时打开 `trustProxy`）。
 
 **约束:**
 - `RELAY_TOKEN` 缺失或少于 16 个字符 → 打印中文原因并以非零码退出。
-- 关闭码：`4400` hello 格式不对或 5 秒内未 hello、`4401` 口令错误、`4409` 被新电脑顶替、`4413` 帧超过 `67584` 字节、`4429` 限流。
+- 关闭码：`4400` hello / proof 格式不对或 5 秒内未完成、`4401` 口令错误、`4403` 电脑身份验证失败（公钥与路由不符、证明错误）、`4409` 被通过身份证明的新电脑连接顶替、`4413` 帧超过 `67584` 字节、`4429` 限流。
 - 每个 routeId 最多 8 个手机会话，超出以 `4429` 拒绝新手机。
-- 每个 IP 每 60 秒最多 30 次新连接。
+- 每个 IP 每 60 秒最多 30 次新连接。`trustProxy` 打开时，来自回环地址的连接按 `X-Forwarded-For` 最右一项（反代追加的真实地址）计数，最左边可伪造的值不参与。
 - 每 25 秒 ping，60 秒无 pong 断开。
 - 不落盘、不打印任何负载内容；只打印连接数变化与错误。
 - 不提供 Docker。README 用中文写：服务器上装 Node 24 后 `npm run build` 再 `node` 直跑、用 systemd 常驻的示例单元文件、Caddy 反代出 `wss://` 的示例（中继保持默认只监听 `127.0.0.1`），说明 `ws://` 只会暴露元数据。
@@ -159,11 +164,13 @@
 - `relay 口令错`、`relay 无 hello`、`relay 超大帧`、`relay 第 9 部手机` → 分别以 `4401`、`4400`、`4413`、`4429` 关闭。
 - `relay 电脑踢会话`：电脑发 `session_close` → 对应手机连接被关闭。
 - `relay 启动校验`：`RELAY_TOKEN` 为 `short` → 进程退出码非零。
+- `relay 反代后按真实 IP 限流`：同一真实 IP 第 31 次 → `4429`，另一个真实 IP 不受影响。
+- `relay 冒充电脑`：有口令、知道公钥但答不出挑战 → `4403`，原电脑与手机不受影响；公钥与路由不符 → `4403`；不答挑战 → `4400`。
 
-- [ ] **Step 1:** 写 **验收** 测试；运行 `npm test` — FAIL。
-- [ ] **Step 2:** 按 **思路** 与 **约束** 实现，写 README / systemd 与 Caddy 示例。
-- [ ] **Step 3:** 运行 `npm test && npm run build && npm run lint` — PASS。
-- [ ] **Step 4:** 提交。
+- [x] **Step 1:** 写 **验收** 测试；运行 `npm test` — FAIL。
+- [x] **Step 2:** 按 **思路** 与 **约束** 实现，写 README / systemd 与 Caddy 示例。
+- [x] **Step 3:** 运行 `npm test && npm run build && npm run lint` — PASS。
+- [x] **Step 4:** 提交。
 
 ### Task 4：远程身份、配置与设备存储
 
@@ -201,10 +208,10 @@
 - `store 设备增删`：加两台、删一台 → 重开后只剩一台，`removeDevice` 不存在的 id 返回 `false`。
 - `store 配置校验`：`relayUrl: 'http://x'`、`lanPort: 80` → 分别抛上面两条文案。
 
-- [ ] **Step 1:** 写 **验收** 测试；运行 `npm test` — FAIL。
-- [ ] **Step 2:** 按 **思路** 与 **约束** 实现。
-- [ ] **Step 3:** 运行 `npm test && npm run lint` — PASS。
-- [ ] **Step 4:** 提交。
+- [x] **Step 1:** 写 **验收** 测试；运行 `npm test` — FAIL。
+- [x] **Step 2:** 按 **思路** 与 **约束** 实现。
+- [x] **Step 3:** 运行 `npm test && npm run lint` — PASS。
+- [x] **Step 4:** 提交。
 
 ### Task 5：远程网关（会话、配对、请求与事件）
 
@@ -221,6 +228,7 @@
   - 应用层消息（JSON，信道内）：`{t:'req', id, method, path, body?}`、`{t:'res', id, status, body?}` 或 `{t:'res', id, status, bytes, contentType}`（`bytes` 为 base64）、`{t:'evt', event}`、`{t:'ctl', msg}`、`{t:'ready', pcName}`、`{t:'paired', deviceId}`
 
 **思路:**
+- 握手帧格式：每个握手消息一帧。配对三条消息都是 `[0x01][Noise 消息]`；日常连接手机首帧 `[0x02][16 字节 deviceId][msg1]`，电脑回 `[0x02][msg2]`。电脑回完最后一条握手消息后立刻发 `ready`，手机侧换帧处理函数时须缓冲，不能丢帧（测试手机 `remote-phone.ts` 的 `buffered` 即为此）。
 - `accept`：等第一帧。`FRAME_PAIR` → 若有有效配对邀请，以 `XXpsk3` 响应方处理；msg2 载荷为 `{pcName}` JSON，msg3 载荷为 `{deviceName}` JSON；成功后 `addDevice`、作废邀请、发 `{t:'paired'}` 再发 `{t:'ready'}`，会话直接继续。`FRAME_KK` → 帧体前 16 字节为 deviceId，查设备取公钥作 `rs`，以 `KK` 响应方处理；成功后发 `{t:'ready'}`。
 - 会话建立后：订阅 `kernel.on`，把事件包成 `evt` 发出（过滤 `memory_changed`）；`req` → 白名单检查 → 构造 `ApiRequest`（`readBody` 返回消息里的 `body`，超过该路由上限则 413）→ `dispatchApi` → `res`；`ctl` 只接受 `abort` 与 `approval` 两种，字段校验与本机 WS 相同，分别调 `kernel.abort` / `kernel.respondApproval`。
 - 维护 `deviceId → 会话集合`；`revoke` 删除设备并关闭其全部会话；会话开 / 关、配对完成、撤销时触发 `on` 监听者。会话建立时 `store.touch`。
@@ -244,11 +252,12 @@
 - `gateway 审批`：触发审批 → 手机收到 `approval_request`；回 `ctl approval approve:true` → 该审批被批准，本机 WS 客户端收到 `approval_resolved`。
 - `gateway 撤销`：撤销已连接设备 → 其会话关闭；再用原密钥 KK 握手被关闭。
 - `gateway 未知设备`、`gateway 握手超时`、`gateway 垃圾首帧` → 承载被关闭。
+- `gateway 配对完成瞬间手机断开`：设备照常保存、邀请作废，并通知 `on` 监听者。
 
-- [ ] **Step 1:** 写测试手机与 **验收** 测试；运行 `npm test` — FAIL。
-- [ ] **Step 2:** 按 **思路** 与 **约束** 实现。
-- [ ] **Step 3:** 运行 `npm test && npm run lint` — PASS。
-- [ ] **Step 4:** 提交。
+- [x] **Step 1:** 写测试手机与 **验收** 测试；运行 `npm test` — FAIL。
+- [x] **Step 2:** 按 **思路** 与 **约束** 实现。
+- [x] **Step 3:** 运行 `npm test && npm run lint` — PASS。
+- [x] **Step 4:** 提交。
 
 ### Task 6：承载（中继连接、局域网监听）与远程服务装配
 
@@ -267,7 +276,7 @@
   - 本机路由（不在远程白名单内）：`GET /api/remote` → `RemoteStatus`；`PUT /api/remote` → body 为 `updateConfig` 的 patch；`POST /api/remote/pairing`；`DELETE /api/remote/pairing`；`DELETE /api/remote/devices/:id`。均返回最新 `RemoteStatus`；未传 `remote` 时 404。
 
 **思路:**
-- `relay-link`：配置了 `relayUrl` 与口令、且有设备或有进行中的配对邀请时连接；发 `hello`（`role: 'pc'`），收到 `session_open` 就为该 sessionId 造一个 `Carrier`（发送时加 16 字节前缀、关闭时发 `session_close`）交给 `gateway.accept(…, 'relay')`；`session_close` 关闭对应 Carrier。断线按 1s 起翻倍、上限 60s 重连，成功后重置。
+- `relay-link`：配置了 `relayUrl` 与口令、且有设备或有进行中的配对邀请时连接；发 `hello`（`role: 'pc'`，带公钥 `pk`），收到 `challenge` 用电脑长期私钥回 `proof`，收到 `session_open` 就为该 sessionId 造一个 `Carrier`（发送时加 16 字节前缀、关闭时发 `session_close`）交给 `gateway.accept(…, 'relay')`；`session_close` 关闭对应 Carrier。断线按 1s 起翻倍、上限 60s 重连，成功后重置。
 - `lan-listener`：`lanEnabled` 且有设备或有配对邀请时，`http.createServer` 监听 `0.0.0.0:lanPort`；只接受路径 `/v1` 的 WebSocket 升级，其余请求一律 404；每条 WS 连接包成 Carrier 交给 `gateway.accept(…, 'lan')`。
 - `service`：组装 store + gateway + 两种承载；配置变化、设备增删、配对开始 / 结束时按上面的条件启停承载；`startPairing` 用 `os.networkInterfaces()` 中非内部的 IPv4 地址填 `lanAddresses`；任何状态变化触发 `on`。
 - `server.ts` 订阅 `remote.on`，向已鉴权的本机 WS 客户端推 `{type:'remote_changed'}`。
@@ -275,7 +284,9 @@
 
 **约束:**
 - 中继 / 局域网的启动失败（如 `EADDRINUSE`、DNS 失败、`4401`）只写入 `relayError` / `lanError` 并触发 `on`，不抛出、不影响内核。错误文案中文，如 `端口 47821 已被占用`、`中继口令错误`。
-- 收到中继 `4401` 时不再自动重连，直到配置变更。
+- 收到中继 `4401` 或 `4403` 时不再自动重连，直到配置变更或用户开始配对。`4409`（被同一身份的连接顶替）按退避重连，且重连成功后不重置退避，避免两份同身份实例每秒互踢。
+- 到中继的连接每 `25000` ms ping 一次，下一轮未收到 pong 即断开重连（电脑睡眠、换网后的半开连接）。
+- 密钥写盘失败（如系统加密不可用）→ `available` 为假，`RemoteService.start` 不抛出；桌面主进程另有兜底，手机功能出错不影响启动。
 - `close()` 关闭全部会话、承载与监听。
 - `RemoteStatus` 与 `/api/remote` 响应绝不包含中继口令与私钥（配对码只在 `pairing.code` 中出现）。
 
@@ -287,13 +298,15 @@
 - `service 端口占用`：先占用 lanPort 再开邀请 → `lan` 为 `'error'`，`lanError` 含 `已被占用`，内核正常。
 - `service 中继重连`：中继关掉再起 → 服务回到 `connected`，已配对手机可再连。
 - `service 口令错`：中继口令不匹配 → `relay` 为 `'error'`，之后不再重连。
+- `service 中继停止后，重新开始配对会重试`：中继改对口令重启后，电脑端配置不变，重新开始配对 → `connected`。
+- `relay-link`：半开连接收不到 pong → 断开重连；能通过真实中继的身份挑战；被同一身份顶替后退避重连。
 - `server 管理路由`：本机 `GET /api/remote` 带令牌 → 200 且不含口令；远程会话请求 `/api/remote` → 403。
 - `server remote_changed`：本机 WS 客户端在配对完成时收到 `{type:'remote_changed'}`。
 
-- [ ] **Step 1:** 写 **验收** 测试；运行 `npm test` — FAIL。
-- [ ] **Step 2:** 按 **思路** 与 **约束** 实现。
-- [ ] **Step 3:** 运行 `npm test && npm run build && npm run lint` — PASS。
-- [ ] **Step 4:** 提交。
+- [x] **Step 1:** 写 **验收** 测试；运行 `npm test` — FAIL。
+- [x] **Step 2:** 按 **思路** 与 **约束** 实现。
+- [x] **Step 3:** 运行 `npm test && npm run build && npm run lint` — PASS。
+- [x] **Step 4:** 提交。
 
 ### Task 7：桌面端"手机"设置页
 
@@ -314,7 +327,8 @@
 - 撤销前用 `Dialog` 二次确认。
 
 **约束:**
-- 文案全部进 `i18n.ts`；颜色只用语义 token；控件复用 `recipes.ts` 的 `FIELD`、`PILL_*` 等；二维码前景 / 背景用 `ink` / `panel` 对应的 token 颜色，深色模式下仍保证足够对比度（二维码周围留白）。
+- 文案全部进 `i18n.ts`；颜色只用语义 token；控件复用 `recipes.ts` 的 `FIELD`、`PILL_*` 等；二维码用 `styles.css` 里的专用 token `qr-paper` / `qr-ink`，深浅色模式都是黑码白底（反色码很多扫码器认不出），周围留白。
+- 配对成功的判据是"有设备的 `pairedAt` 不早于对话框打开时间"（同一台手机重新配对时设备数不变）。
 - 未配置中继也能配对（只走局域网）；未配置中继时页面提示"在外面使用需要配置中继服务器"。
 - `relayUrl` 以 `ws://` 开头时显示提示："未加密的中继会暴露连接时间等信息，内容仍然加密"。
 - 撤销确认文案：`撤销后这台手机会立即断开，需要重新扫码才能再连。`
@@ -325,10 +339,10 @@
 - 用 Task 5 的测试手机脚本扫描码文本完成配对，页面无需刷新即出现新设备。
 - 把 `lanPort` 设为被占用的端口 → 页面显示错误文案。
 
-- [ ] **Step 1:** 按 **思路** 与 **约束** 实现。
-- [ ] **Step 2:** 运行 `npm run build && npm run lint` — PASS。
-- [ ] **Step 3:** 按 **验收** 手动检查并截图。
-- [ ] **Step 4:** 提交。
+- [x] **Step 1:** 按 **思路** 与 **约束** 实现。
+- [x] **Step 2:** 运行 `npm run build && npm run lint` — PASS。
+- [x] **Step 3:** 按 **验收** 手动检查并截图。
+- [x] **Step 4:** 提交。
 
 ### Task 8：关窗口缩到托盘
 
@@ -354,7 +368,30 @@
 - 有设备：关窗口 → 窗口消失、托盘可见、通知出现一次；测试手机仍能连上并收到 `ready`；托盘"打开 minibot"恢复窗口；托盘"退出"后进程结束且局域网端口释放。
 - 在 Linux 与 Windows 各验证一次（Windows 可在打包后的安装包上验证）。
 
-- [ ] **Step 1:** 按 **思路** 与 **约束** 实现。
-- [ ] **Step 2:** 运行 `npm run build && npm run lint` — PASS。
+- [x] **Step 1:** 按 **思路** 与 **约束** 实现。
+- [x] **Step 2:** 运行 `npm run build && npm run lint` — PASS。
 - [ ] **Step 3:** 按 **验收** 手动检查。
-- [ ] **Step 4:** 提交。
+- [x] **Step 4:** 提交。
+
+---
+
+## 实施记录
+
+分支 `feat/remote-pc-relay`。8 个任务均已实现，`npm test`（core 与 relay）与 `npm run build` 通过。
+
+**未完成 / 未按原方式验证**
+- `npm run lint`：开发环境缺少 `typescript-eslint` 包无法运行，各步改用 `tsc --noEmit` 做类型检查。
+- Task 7 手动验收：没有启动 Electron，改为用脚本起真实内核 + 远程服务 + 本机服务，用 Playwright 加载构建后的页面截图（空状态、配对对话框浅色 / 深色、配对后设备列表、同一手机重新配对、撤销确认、端口占用），并用 Node 测试手机完成真实配对。
+- Task 8 Step 3（托盘、通知、Linux / Windows 各验证一次）：未做，需手动验证。
+
+**代码审核后的修改**（均先写失败测试再修）
+1. 中继要求电脑用私钥证明身份，拿到口令与公钥的人无法冒充电脑（Task 3、Task 6）。
+2. 中继在反代后按真实客户端地址限流（`RELAY_TRUST_PROXY`）。
+3. 电脑到中继的连接加心跳，发现半开连接后重连。
+4. 中继因口令错误等停止后，用户改配置或开始配对时重试。
+5. 配对最后一步后手机立刻断开、或保存设备失败时，仍通知界面刷新。
+6. 同一台手机重新配对时对话框正确显示"已配对"。
+7. 首次保存密钥失败不再让应用无法启动。
+8. 加密信道发送积压超过 16 MiB 时断开会话。
+9. 二维码颜色改用专用 token。
+10. `packages/relay/dist/` 不再入库。
