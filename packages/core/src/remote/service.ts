@@ -160,7 +160,9 @@ export class RemoteService {
     // 中继
     const wantRelay = active && config.relayUrl !== null && token !== null;
     const nextLinkKey = wantRelay ? `${config.relayUrl}\n${token}` : null;
-    if (nextLinkKey !== this.linkKey) {
+    // 停止重连的链接（口令错误、被顶替）只在用户有动作（改配置、开始配对）时再试一次
+    const retryStopped = force && this.link !== null && this.link.isStopped();
+    if (nextLinkKey !== this.linkKey || retryStopped) {
       this.link?.stop();
       this.link = null;
       this.linkKey = nextLinkKey;

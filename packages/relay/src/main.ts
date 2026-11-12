@@ -13,7 +13,8 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) {
   process.exit(1);
 }
 
-const relay = await startRelay({ host, port, token, log: (message) => console.log(message) });
+const trustProxy = process.env['RELAY_TRUST_PROXY'] === '1';
+const relay = await startRelay({ host, port, token, trustProxy, log: (message) => console.log(message) });
 console.log(`minibot 中继已启动：${host}:${relay.port}`);
 
 const shutdown = (): void => {

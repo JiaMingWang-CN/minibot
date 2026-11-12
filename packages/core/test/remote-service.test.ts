@@ -263,3 +263,26 @@ test('server 未传 remote 时管理路由 404', async () => {
     await h.close();
   }
 });
+
+test('service 中继停止后，重新开始配对会重试', async () => {
+  const port = await freePort();
+  let relay: RelayHandle = await startRelay({ host: '127.0.0.1', port, token: 'other-relay-token-000' });
+  try {
+    await withService(
+      async ({ service }) => {
+        await service.updateConfig({ relayUrl: `ws://127.0.0.1:${port}/v1`, relayToken: RELAY_TOKEN, lanEnabled: false });
+        service.startPairing();
+        await waitFor(() => service.status().relay === 'error');
+        assert.equal(service.status().relayError, '中继口令错误');
+        // 中继那边把口令改对了，电脑端配置没变
+        await relay.close();
+        relay = await startRelay({ host: '127.0.0.1', port, token: RELAY_TOKEN });
+        service.startPairing();
+        await waitFor(() => service.status().relay === 'connected');
+      },
+      { relayBackoffMs: 50 },
+    );
+  } finally {
+    await relay.close();
+  }
+});

@@ -12,9 +12,12 @@ export interface RelayLinkOptions {
   accept: (carrier: Carrier) => void;
   onState: (state: RelayLinkState, error: string | null) => void;
   initialBackoffMs?: number;
+  /** 测试用，默认 25000：隔这么久发一次 ping，下一轮还没收到 pong 就断开重连 */
+  pingIntervalMs?: number;
 }
 
 const MAX_BACKOFF_MS = 60_000;
+const PING_INTERVAL_MS = 25_000;
 const SESSION_ID_BYTES = 16;
 
 interface SessionCarrier extends Carrier {
@@ -59,6 +62,7 @@ export class RelayLink {
   private ws: WebSocket | null = null;
   private readonly sessions = new Map<string, SessionCarrier>();
   private timer: NodeJS.Timeout | null = null;
+  private heartbeat: NodeJS.Timeout | null = null;
   private backoff: number;
   private stopped = false;
 
@@ -71,16 +75,27 @@ export class RelayLink {
     this.connect();
   }
 
+  /** 因口令错误、被顶替或地址无效而停止，不会再自己重连 */
+  isStopped(): boolean {
+    return this.stopped;
+  }
+
   stop(): void {
     this.stopped = true;
     if (this.timer !== null) clearTimeout(this.timer);
     this.timer = null;
+    this.stopHeartbeat();
     const ws = this.ws;
     this.ws = null;
     this.dropSessions();
     ws?.removeAllListeners();
     ws?.on('error', () => {});
     ws?.terminate();
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeat !== null) clearInterval(this.heartbeat);
+    this.heartbeat = null;
   }
 
   private dropSessions(): void {
@@ -101,9 +116,26 @@ export class RelayLink {
     }
     this.ws = ws;
     let failure: string | null = null;
+    // 电脑睡眠、换网络后连接可能半开：本地一直是 OPEN 却再也收不到东西，靠心跳发现并重连
+    let alive = true;
+    ws.on('pong', () => {
+      alive = true;
+    });
 
     ws.on('open', () => {
       ws.send(JSON.stringify({ type: 'hello', role: 'pc', routeId: this.o.routeId, token: this.o.token }));
+      this.stopHeartbeat();
+      const heartbeat = setInterval(() => {
+        if (!alive) {
+          failure = '与中继的连接已失去响应';
+          ws.terminate();
+          return;
+        }
+        alive = false;
+        ws.ping();
+      }, this.o.pingIntervalMs ?? PING_INTERVAL_MS);
+      heartbeat.unref();
+      this.heartbeat = heartbeat;
     });
 
     ws.on('message', (data: RawData, isBinary: boolean) => {
@@ -150,6 +182,7 @@ export class RelayLink {
 
     ws.on('close', (code: number) => {
       if (this.ws !== ws) return;
+      this.stopHeartbeat();
       this.ws = null;
       this.dropSessions();
       if (code === 4401) {

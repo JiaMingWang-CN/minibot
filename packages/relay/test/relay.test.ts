@@ -197,3 +197,22 @@ test('relay 启动校验', () => {
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /RELAY_TOKEN/);
 });
+
+test('relay 反代后按真实 IP 限流', async () => {
+  const relay = await startRelay({ host: '127.0.0.1', port: 0, token: TOKEN, trustProxy: true });
+  try {
+    const open = (ip: string) =>
+      new Promise<number | null>((resolve) => {
+        const ws = new WebSocket(`ws://127.0.0.1:${relay.port}/v1`, { headers: { 'x-forwarded-for': `9.9.9.9, ${ip}` } });
+        ws.on('error', () => {});
+        ws.on('close', (code) => resolve(code));
+        ws.on('open', () => setTimeout(() => resolve(null), 50));
+      });
+    for (let i = 0; i < 30; i++) assert.equal(await open('10.0.0.1'), null);
+    assert.equal(await open('10.0.0.1'), 4429);
+    // 另一个真实 IP 不受影响；最左边可伪造的值不参与计数
+    assert.equal(await open('10.0.0.2'), null);
+  } finally {
+    await relay.close();
+  }
+});

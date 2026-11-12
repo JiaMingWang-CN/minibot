@@ -1,4 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import type { IncomingMessage } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { WebSocketServer, type RawData, type WebSocket } from 'ws';
 
@@ -24,6 +25,11 @@ export interface RelayOptions {
   log?: (message: string) => void;
   /** 测试用，默认 5000 */
   helloTimeoutMs?: number;
+  /**
+   * 部署在本机反代（如 Caddy）后面时打开：来自回环地址的连接按 X-Forwarded-For
+   * 最右边一项（反代追加的真实客户端地址）限流，否则所有人都是 127.0.0.1。
+   */
+  trustProxy?: boolean;
 }
 
 export interface RelayHandle {
@@ -42,6 +48,19 @@ function digest(value: string): Buffer {
 
 function tokenMatches(candidate: string, token: string): boolean {
   return timingSafeEqual(digest(candidate), digest(token));
+}
+
+function isLoopback(address: string): boolean {
+  return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
+}
+
+function clientIp(req: IncomingMessage, trustProxy: boolean): string {
+  const remote = req.socket.remoteAddress ?? 'unknown';
+  if (!trustProxy || !isLoopback(remote)) return remote;
+  const header = req.headers['x-forwarded-for'];
+  const value = Array.isArray(header) ? header.join(',') : header;
+  const last = value?.split(',').map((part) => part.trim()).filter((part) => part.length > 0).pop();
+  return last ?? remote;
 }
 
 function sendJson(ws: WebSocket, message: Record<string, unknown>): void {
@@ -180,7 +199,7 @@ export async function startRelay(o: RelayOptions): Promise<RelayHandle> {
     lastPong.set(ws, now());
     ws.on('pong', () => lastPong.set(ws, now()));
 
-    if (rateLimited(req.socket.remoteAddress ?? 'unknown')) {
+    if (rateLimited(clientIp(req, o.trustProxy === true))) {
       ws.close(4429, 'rate limited');
       return;
     }
