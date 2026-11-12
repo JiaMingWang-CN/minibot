@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Kernel } from '../src/kernel.ts';
+import type { OpenOptions } from '../src/kernel.ts';
 import type { KernelEvent } from '../src/events.ts';
 import type { KeyCrypto } from '../src/secrets/store.ts';
 import type { CallModel } from '../src/model/client.ts';
@@ -45,9 +46,12 @@ export interface KernelHarness {
   close(): Promise<void>;
 }
 
-export async function kernelHarness(model: CallModel = textModel()): Promise<KernelHarness> {
+export async function kernelHarness(
+  model: CallModel = textModel(),
+  options: Partial<Omit<OpenOptions, 'dataRoot' | 'callModel'>> = {},
+): Promise<KernelHarness> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'minibot-h-'));
-  const kernel = await Kernel.open({ dataRoot: root, crypto: fakeCrypto(), callModel: model });
+  const kernel = await Kernel.open({ dataRoot: root, crypto: fakeCrypto(), callModel: model, ...options });
   const events: KernelEvent[] = [];
   kernel.on((e) => events.push(e));
   const provider = await kernel.addProvider({

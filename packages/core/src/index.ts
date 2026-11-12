@@ -4,6 +4,17 @@ export { SecretSet, REDACTED } from './secrets/redact.ts';
 export { DiagLog, type DiagEvent, type TimedDiagEvent, type LogLevel, type DiagLogOptions } from './diag/log.ts';
 export { scrubPaths, scrubStack, redactLike, type PathContext } from './diag/scrub.ts';
 export {
+  DiagnosticUploader,
+  FeedbackError,
+  DIAG_QUEUE_MAX,
+  DIAG_BATCH_MAX,
+  FEEDBACK_DESCRIPTION_MAX,
+  FEEDBACK_CONTACT_MAX,
+  type FeedbackInput,
+  type DiagnosticUploaderOptions,
+} from './diag/uploader.ts';
+export { ModelMetrics } from './diag/metrics.ts';
+export {
   SecretStore,
   SecretPersistError,
   type KeyCrypto,
@@ -37,6 +48,8 @@ export type {
   KnownModel,
   CustomModel,
   AppConfig,
+  AppConfigDiagnostics,
+  DiagnosticConsent,
   ApiFormat,
   ThinkingLevel,
   ApprovalMode,

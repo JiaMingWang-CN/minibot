@@ -91,6 +91,16 @@ export function openDb(file: string): DatabaseSync {
     )
   `);
   db.exec('CREATE INDEX IF NOT EXISTS idx_approval_log_bot ON approval_log(bot_id, id)');
+  // 诊断事件上传队列：只存白名单结构化事件，不存日志原文
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS diag_queue (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      name TEXT NOT NULL,
+      data_json TEXT NOT NULL
+    )
+  `);
   // 消息全文索引：trigram 分词按子串匹配，中文不需要分词；少于 3 个字的查询改用 LIKE
   if (!hasTable(db, 'messages_fts')) {
     db.exec(

@@ -43,6 +43,9 @@ function errorStatus(code: KernelError['code']): number {
   if (code === 'not_found') return 404;
   if (code === 'conflict' || code === 'provider_in_use') return 409;
   if (code === 'invalid' || code === 'key_not_persistable') return 400;
+  if (code === 'rate_limited') return 429;
+  if (code === 'network') return 502;
+  if (code === 'unavailable') return 503;
   return 500;
 }
 
@@ -138,6 +141,39 @@ async function route(kernel: Kernel, req: ApiRequest, ctx: DispatchContext): Pro
       consolidationModel: value as { providerId: string; model: string } | null,
     });
     return json(200, { ok: true });
+  }
+  if (method === 'GET' && pathname === '/api/diagnostics') {
+    return json(200, kernel.diagnostics());
+  }
+  if (method === 'PUT' && pathname === '/api/diagnostics') {
+    const body = objectBody(await req.readBody(MAX_BODY_BYTES));
+    const consent = body['consent'];
+    if (consent !== 'on' && consent !== 'off') throw new KernelError('invalid', 'consent 必须是 on 或 off');
+    await kernel.setDiagnostics(consent);
+    return json(200, { ok: true });
+  }
+  if (method === 'GET' && pathname === '/api/diagnostics/logs-preview') {
+    return json(200, await kernel.logsPreview());
+  }
+  if (method === 'POST' && pathname === '/api/diagnostics/client-error') {
+    const body = objectBody(await req.readBody(MAX_BODY_BYTES));
+    const message = stringField(body, 'message');
+    const stack = body['stack'];
+    if (stack !== undefined && typeof stack !== 'string') throw new KernelError('invalid', 'stack 必须是字符串');
+    return json(200, kernel.reportClientError({ message, ...(stack !== undefined ? { stack } : {}) }));
+  }
+  if (method === 'POST' && pathname === '/api/feedback') {
+    const body = objectBody(await req.readBody(MAX_BODY_BYTES));
+    const description = stringField(body, 'description');
+    const contact = body['contact'];
+    if (contact !== undefined && typeof contact !== 'string') {
+      throw new KernelError('invalid', 'contact 必须是字符串');
+    }
+    const attachLogs = body['attachLogs'] === true;
+    return json(
+      200,
+      await kernel.sendFeedback({ description, ...(contact !== undefined ? { contact } : {}), attachLogs }),
+    );
   }
   if (method === 'POST' && pathname === '/api/providers') {
     const body = objectBody(await req.readBody(MAX_BODY_BYTES));

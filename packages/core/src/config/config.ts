@@ -1,7 +1,8 @@
+import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { atomicWriteFile } from '../fs/atomic-write.ts';
 import type { DataPaths } from '../paths.ts';
-import type { AppConfig, Bot, CustomModel, Provider, ThinkingLevel } from './types.ts';
+import type { AppConfig, AppConfigDiagnostics, Bot, CustomModel, Provider, ThinkingLevel } from './types.ts';
 import { APPROVAL_MODES, THINKING_LEVELS } from './types.ts';
 
 import personasData from './default-personas.json' with { type: 'json' };
@@ -40,16 +41,26 @@ export function effectiveWorkspace(p: DataPaths, b: Bot): string {
 }
 
 export async function loadConfig(p: DataPaths): Promise<AppConfig> {
+  return (await loadConfigState(p)).config;
+}
+
+/** 连诊断配置是否由本次加载补上一起返回：内核据此把新生成的 installId 落盘 */
+export async function loadConfigState(
+  p: DataPaths,
+): Promise<{ config: AppConfig; diagnosticsMigrated: boolean }> {
   let text: string;
   try {
     text = await fs.readFile(p.config, 'utf8');
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return defaultConfig();
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { config: defaultConfig(), diagnosticsMigrated: false };
+    }
     throw err;
   }
-  const migrated = migrate(JSON.parse(text));
+  const raw = JSON.parse(text);
+  const migrated = migrate(raw);
   if (!('providers' in migrated)) throw new Error('config.json 不是应用配置');
-  return migrated;
+  return { config: migrated, diagnosticsMigrated: !isRecord(isRecord(raw) ? raw['diagnostics'] : null) };
 }
 
 export async function saveConfig(p: DataPaths, c: AppConfig): Promise<void> {
@@ -93,6 +104,22 @@ export async function listBots(p: DataPaths): Promise<Bot[]> {
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+function defaultDiagnostics(): AppConfigDiagnostics {
+  return { consent: 'unset', installId: randomUUID() };
+}
+
+function migrateDiagnostics(raw: unknown): AppConfigDiagnostics {
+  if (!isRecord(raw)) return defaultDiagnostics();
+  const consent = raw['consent'];
+  const installId = raw['installId'];
+  return {
+    consent: consent === 'on' || consent === 'off' ? consent : 'unset',
+    installId: typeof installId === 'string' && installId.length > 0 && installId.length <= 64
+      ? installId
+      : randomUUID(),
+  };
 }
 
 function asString(v: unknown): string | null {
@@ -179,6 +206,7 @@ export function migrate(raw: unknown): AppConfig | Bot {
       providers,
       mainBotId: mainBotId === null || mainBotId.length === 0 ? null : mainBotId,
       consolidationModel,
+      diagnostics: migrateDiagnostics(raw['diagnostics']),
     };
   }
   if (typeof raw['id'] === 'string') {

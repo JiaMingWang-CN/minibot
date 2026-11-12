@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { SecretSet } from '../secrets/redact.ts';
-import { redactLike, scrubPaths, type PathContext } from './scrub.ts';
+import { redactLike, scrubPaths, scrubStack, type PathContext } from './scrub.ts';
 
 export type LogLevel = 'info' | 'warn' | 'error';
 
@@ -164,6 +164,12 @@ export class DiagLog {
     } catch {
       return '';
     }
+  }
+
+  /** 用日志的路径上下文脱敏一段堆栈；事件里的 stack 必须来自这里 */
+  scrubStack(stack: string): string {
+    const ctx = this.context();
+    return ctx === null ? stack : scrubStack(stack, ctx);
   }
 
   async close(): Promise<void> {

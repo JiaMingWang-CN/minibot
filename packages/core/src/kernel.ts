@@ -5,10 +5,19 @@ import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { dataPaths, type DataPaths } from './paths.ts';
 import { APPROVAL_MODES } from './config/types.ts';
-import type { AppConfig, ApiFormat, Bot, CustomModel, Preset, Provider, ThinkingLevel } from './config/types.ts';
+import type {
+  AppConfig,
+  ApiFormat,
+  Bot,
+  CustomModel,
+  DiagnosticConsent,
+  Preset,
+  Provider,
+  ThinkingLevel,
+} from './config/types.ts';
 import {
   loadBot,
-  loadConfig,
+  loadConfigState,
   saveBot,
   saveConfig,
   effectiveWorkspace,
@@ -71,6 +80,14 @@ import { ReadTracker } from './tools/read-tracker.ts';
 import type { ToolEnv } from './tools/registry.ts';
 import { callModel as defaultCallModel, instrumentCallModel, testConnection, type CallModel } from './model/client.ts';
 import { DiagLog } from './diag/log.ts';
+import { ModelMetrics } from './diag/metrics.ts';
+import {
+  DiagnosticUploader,
+  FeedbackError,
+  FEEDBACK_CONTACT_MAX,
+  FEEDBACK_DESCRIPTION_MAX,
+  type FeedbackInput,
+} from './diag/uploader.ts';
 import type { Block, ImageMediaType, StoredMessage } from './model/types.ts';
 
 export const MAX_IMAGES_PER_MESSAGE = 4;
@@ -96,7 +113,10 @@ export type KernelErrorCode =
   | 'conflict'
   | 'provider_in_use'
   | 'invalid'
-  | 'key_not_persistable';
+  | 'key_not_persistable'
+  | 'network'
+  | 'rate_limited'
+  | 'unavailable';
 
 export class KernelError extends Error {
   code: KernelErrorCode;
@@ -106,6 +126,20 @@ export class KernelError extends Error {
     this.name = 'KernelError';
     this.code = code;
   }
+}
+
+function feedbackCode(kind: FeedbackError['kind']): KernelErrorCode {
+  if (kind === 'rate_limited') return 'rate_limited';
+  if (kind === 'network') return 'network';
+  if (kind === 'rejected') return 'invalid';
+  return 'unavailable';
+}
+
+function feedbackMessage(kind: FeedbackError['kind']): string {
+  if (kind === 'rate_limited') return '提交太频繁，请稍后再试';
+  if (kind === 'network') return '网络连接失败，请检查网络后重试';
+  if (kind === 'rejected') return '反馈内容未被接受，请修改后重试';
+  return '反馈服务暂不可用，请稍后再试';
 }
 
 export interface KernelState {
@@ -118,6 +152,8 @@ export interface KernelState {
   secretsUnreadable: boolean;
   /** 每个 bot 未指定工作目录时使用的默认目录（bot id → 路径） */
   defaultWorkspaces: Record<string, string>;
+  /** 诊断同意状态还是 unset 且收集点可用：主界面显示一次提示条 */
+  diagnosticsPrompt: boolean;
 }
 
 export interface OpenOptions {
@@ -130,6 +166,14 @@ export interface OpenOptions {
   retryDelaysMs?: number[];
   /** 应用版本号，写进 app.start 事件（桌面端传 app.getVersion()） */
   appVersion?: string;
+  /** 诊断收集点地址；为空时上传与反馈整体关闭 */
+  collectUrl?: string | null;
+  /** 测试注入的 fetch */
+  fetch?: typeof fetch;
+  /** 测试注入的时钟（上传退避与指标聚合用） */
+  now?: () => number;
+  /** 是否启动定时上传；测试关掉后手动调用 tickDiagnostics() */
+  autoUpload?: boolean;
 }
 
 export interface OnboardingInput {
@@ -189,6 +233,14 @@ export class Kernel {
   private closed = false;
   private retryDelaysMs: number[] | undefined;
   private appVersion: string | undefined;
+  private collectUrl: string | null;
+  private fetchImpl: typeof fetch | undefined;
+  private nowFn: () => number;
+  private autoUpload: boolean;
+  private osName = '';
+  private metrics!: ModelMetrics;
+  private metricsTimer: NodeJS.Timeout | null = null;
+  private uploader!: DiagnosticUploader;
   /** 本地日志与诊断事件 */
   diag!: DiagLog;
   /** 正在执行一轮对话的线程；此时新消息作为插话 */
@@ -210,6 +262,10 @@ export class Kernel {
     this.callModel = o.callModel ?? defaultCallModel;
     this.retryDelaysMs = o.retryDelaysMs;
     this.appVersion = o.appVersion;
+    this.collectUrl = o.collectUrl ?? null;
+    this.fetchImpl = o.fetch;
+    this.nowFn = o.now ?? Date.now;
+    this.autoUpload = o.autoUpload ?? true;
   }
 
   private async init(): Promise<void> {
@@ -227,15 +283,42 @@ export class Kernel {
       pathContext: () => ({ home: this.home, user: currentUser(), host: os.hostname() }),
     });
     this.callModel = instrumentCallModel(this.callModel, this.diag);
+    this.metrics = new ModelMetrics();
+    this.callModel = this.measureCalls(this.callModel);
     this.secretStore = new SecretStore(this.paths.secrets, this.crypto, this.secretSet, {
       platform: this.platform,
     });
     await this.secretStore.load();
-    this.config = await loadConfig(this.paths);
+    const loaded = await loadConfigState(this.paths);
+    this.config = loaded.config;
+    if (this.config.diagnostics === undefined) {
+      // 新装或配置里还没有诊断字段：先落盘，让 installId 在重启后保持不变
+      this.config.diagnostics = { consent: 'unset', installId: randomUUID() };
+      await saveConfig(this.paths, this.config);
+    } else if (loaded.diagnosticsMigrated) {
+      await saveConfig(this.paths, this.config);
+    }
     this.secretStore.registerEnv(this.envKeyNames());
     this.db = openDb(this.paths.db);
     repairDanglingToolUses(this.db);
     closeDangling(this.db);
+    this.osName = `${this.platform} ${os.release()}`;
+    this.uploader = new DiagnosticUploader({
+      db: this.db,
+      diag: this.diag,
+      collectUrl: this.collectUrl,
+      installId: () => this.config.diagnostics?.installId ?? '',
+      consent: () => this.diagnosticsConsent(),
+      platform: this.platform === 'android' ? 'android' : 'win32',
+      appVersion: this.appVersion ?? '',
+      os: this.osName,
+      ...(this.fetchImpl !== undefined ? { fetchImpl: this.fetchImpl } : {}),
+      now: this.nowFn,
+      autoStart: this.autoUpload,
+    });
+    this.uploader.start();
+    this.metricsTimer = setInterval(() => this.flushMetrics(), 3600_000);
+    this.metricsTimer.unref();
     this.revisions = new MemoryRevisions(this.db, this.paths);
     this.broker = new ApprovalBroker((e) => {
       // 决策日志：请求时记一行，结果出来时补上；中止导致的取消记为 system
@@ -268,7 +351,7 @@ export class Kernel {
       },
     );
     for (const bot of await this.bots()) this.diag.addWorkspace(effectiveWorkspace(this.paths, bot));
-    const osName = `${this.platform} ${os.release()}`;
+    const osName = this.osName;
     this.diag.write(
       'info',
       'app',
@@ -280,6 +363,35 @@ export class Kernel {
         data: { ...(this.appVersion !== undefined ? { appVersion: this.appVersion } : {}), os: osName },
       },
     );
+  }
+
+  /** 把每次模型调用的耗时与成败记入指标聚合，供每小时上报 */
+  private measureCalls(inner: CallModel): CallModel {
+    return async (a) => {
+      const started = this.nowFn();
+      const presetId = a.provider.presetId ?? a.provider.format;
+      try {
+        const result = await inner(a);
+        this.metrics.record(presetId, a.request.model, true, this.nowFn() - started);
+        return result;
+      } catch (err) {
+        this.metrics.record(presetId, a.request.model, false, this.nowFn() - started);
+        throw err;
+      }
+    };
+  }
+
+  private flushMetrics(): void {
+    for (const event of this.metrics.flush()) this.uploader.push(event);
+  }
+
+  /** 测试用：手动驱动一次上传检查 */
+  tickDiagnostics(): Promise<void> {
+    return this.uploader.tick();
+  }
+
+  private diagnosticsConsent(): DiagnosticConsent {
+    return this.config.diagnostics?.consent ?? 'unset';
   }
 
   on(listener: (e: KernelEvent) => void): () => void {
@@ -383,6 +495,7 @@ export class Kernel {
       canPersistKeys: this.secretStore.canPersist(),
       secretsUnreadable: this.secretStore.isUnreadable(),
       defaultWorkspaces: Object.fromEntries(bots.map((b) => [b.id, this.paths.defaultWorkspace(b.id)])),
+      diagnosticsPrompt: this.diagnosticsConsent() === 'unset' && this.uploader.available,
     };
   }
 
@@ -1105,9 +1218,73 @@ export class Kernel {
     await saveConfig(this.paths, this.config);
   }
 
+  // —— 诊断与反馈 ——
+
+  diagnostics(): { consent: DiagnosticConsent; available: boolean; appVersion: string } {
+    return {
+      consent: this.diagnosticsConsent(),
+      available: this.uploader.available,
+      appVersion: this.appVersion ?? '',
+    };
+  }
+
+  async setDiagnostics(consent: 'on' | 'off'): Promise<void> {
+    const diagnostics = this.config.diagnostics;
+    if (diagnostics === undefined) throw new KernelError('invalid', '诊断配置缺失');
+    diagnostics.consent = consent;
+    await saveConfig(this.paths, this.config);
+    // off 立即清空队列；on 立即尝试上传一次
+    this.uploader.setConsent(consent);
+  }
+
+  async logsPreview(): Promise<{ text: string }> {
+    return { text: await this.uploader.recentLogs() };
+  }
+
+  async sendFeedback(input: FeedbackInput): Promise<{ ok: true }> {
+    if (!this.uploader.available) throw new KernelError('not_found', '反馈功能未开启');
+    if (typeof input.description !== 'string' || input.description.trim().length === 0) {
+      throw new KernelError('invalid', '问题描述不能为空');
+    }
+    if (input.description.length > FEEDBACK_DESCRIPTION_MAX) {
+      throw new KernelError('invalid', `问题描述不能超过 ${FEEDBACK_DESCRIPTION_MAX} 字`);
+    }
+    if (input.contact !== undefined && input.contact.length > FEEDBACK_CONTACT_MAX) {
+      throw new KernelError('invalid', `联系方式不能超过 ${FEEDBACK_CONTACT_MAX} 字`);
+    }
+    try {
+      await this.uploader.sendFeedback(input);
+    } catch (err) {
+      if (err instanceof FeedbackError) throw new KernelError(feedbackCode(err.kind), feedbackMessage(err.kind));
+      throw err;
+    }
+    return { ok: true };
+  }
+
+  /** 渲染端未捕获错误：消息只进完整日志，事件只带脱敏堆栈 */
+  reportClientError(input: { message: string; stack?: string; source?: string }): { ok: true } {
+    const message = typeof input.message === 'string' ? input.message : '';
+    const stack = typeof input.stack === 'string' && input.stack.length > 0 ? this.diag.scrubStack(input.stack) : undefined;
+    this.diag.write(
+      'error',
+      'app',
+      'renderer.error',
+      { message, ...(stack !== undefined ? { stack } : {}) },
+      {
+        kind: 'crash',
+        name: 'crash/renderer',
+        data: { source: 'renderer', ...(stack !== undefined ? { stack } : {}) },
+      },
+    );
+    return { ok: true };
+  }
+
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    if (this.metricsTimer !== null) clearInterval(this.metricsTimer);
+    this.metricsTimer = null;
+    this.uploader.close();
     this.queue.abortAll();
     await Promise.allSettled([...this.pendingJobs]);
     // 整理在数据库关闭后还可能写记忆文件：先中止并等它结束

@@ -39,6 +39,16 @@ export interface AppConfig {
   providers: Provider[];
   mainBotId: string | null;
   consolidationModel: { providerId: string; model: string } | null;
+  /** 诊断上传的同意状态与本机标识；旧配置加载时补上，saved 后保持稳定 */
+  diagnostics?: AppConfigDiagnostics;
+}
+
+/** unset：只入本地队列不上传；off：不入队并清空队列；反馈不受此开关限制 */
+export type DiagnosticConsent = 'unset' | 'on' | 'off';
+
+export interface AppConfigDiagnostics {
+  consent: DiagnosticConsent;
+  installId: string;
 }
 
 export interface Bot {
