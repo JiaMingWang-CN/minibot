@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { Block, MessageKind, StoredMessage, Usage } from '../model/types.ts';
-import { searchableText } from './db.ts';
+import { inTransaction, searchableText } from './db.ts';
 
 export const CANCELLED_TEXT = '工具调用已取消（用户中断或应用退出）';
 
@@ -31,27 +31,31 @@ export function appendMessage(
 ): StoredMessage {
   const createdAt = Date.now();
   const blocks = JSON.stringify(m.blocks);
-  const result = db
-    .prepare(
-      `INSERT INTO messages (thread_id, role, blocks, kind, interrupted, created_at, input_tokens, output_tokens, cached_tokens)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
-      m.threadId,
-      m.role,
-      blocks,
-      m.kind,
-      m.interrupted ? 1 : 0,
-      createdAt,
-      m.usage?.inputTokens ?? null,
-      m.usage?.outputTokens ?? null,
-      m.usage?.cachedInputTokens ?? null,
-    );
-  const id = Number(result.lastInsertRowid);
-  const text = searchableText(m.kind, blocks);
-  if (text.length > 0) {
-    db.prepare('INSERT INTO messages_fts (text, thread_id, message_id) VALUES (?, ?, ?)').run(text, m.threadId, id);
-  }
+  // 消息与全文索引要么都写入要么都不写
+  const id = inTransaction(db, () => {
+    const result = db
+      .prepare(
+        `INSERT INTO messages (thread_id, role, blocks, kind, interrupted, created_at, input_tokens, output_tokens, cached_tokens)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        m.threadId,
+        m.role,
+        blocks,
+        m.kind,
+        m.interrupted ? 1 : 0,
+        createdAt,
+        m.usage?.inputTokens ?? null,
+        m.usage?.outputTokens ?? null,
+        m.usage?.cachedInputTokens ?? null,
+      );
+    const rowId = Number(result.lastInsertRowid);
+    const text = searchableText(m.kind, blocks);
+    if (text.length > 0) {
+      db.prepare('INSERT INTO messages_fts (text, thread_id, message_id) VALUES (?, ?, ?)').run(text, m.threadId, rowId);
+    }
+    return rowId;
+  });
   const stored: StoredMessage = { ...m, id, createdAt };
   if (stored.usage === undefined) delete stored.usage;
   return stored;
@@ -92,10 +96,12 @@ export function getMessage(db: DatabaseSync, id: number): StoredMessage | null {
 
 /** 删除线程中 id >= fromId 的消息（含索引），返回被删的消息 */
 export function deleteMessagesFrom(db: DatabaseSync, threadId: string, fromId: number): StoredMessage[] {
-  const removed = messagesFrom(db, threadId, fromId);
-  db.prepare('DELETE FROM messages_fts WHERE thread_id = ? AND message_id >= ?').run(threadId, fromId);
-  db.prepare('DELETE FROM messages WHERE thread_id = ? AND id >= ?').run(threadId, fromId);
-  return removed;
+  return inTransaction(db, () => {
+    const removed = messagesFrom(db, threadId, fromId);
+    db.prepare('DELETE FROM messages_fts WHERE thread_id = ? AND message_id >= ?').run(threadId, fromId);
+    db.prepare('DELETE FROM messages WHERE thread_id = ? AND id >= ?').run(threadId, fromId);
+    return removed;
+  });
 }
 
 export interface ThreadUsage {

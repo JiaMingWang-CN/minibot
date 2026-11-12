@@ -435,7 +435,9 @@ test('手动压缩经过线程队列：等正在进行的一轮结束后才开�
 // 9
 test('工作目录经由链接给出时，目录内的读取不需要审批', async () => {
   const root = await tmp('link');
-  const paths = dataPaths(root);
+  // 工作目录在数据目录之外（数据目录内除默认工作区外一律敏感）
+  const paths = dataPaths(path.join(root, 'data'));
+  await fs.mkdir(paths.root, { recursive: true });
   const realWs = path.join(root, 'real-ws');
   await fs.mkdir(realWs, { recursive: true });
   await fs.writeFile(path.join(realWs, 'a.txt'), 'hello');

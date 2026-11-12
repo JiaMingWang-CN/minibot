@@ -125,6 +125,7 @@ const zhCN = {
   'approval.title': '需要你的批准',
   'approval.approve': '批准',
   'approval.deny': '拒绝',
+  'approval.preview': '将要写入的内容',
   'approval.always': '总是允许这条命令',
   'approval.elsewhere': '“{title}”等 {count} 个请求在等你批准',
   'approval.goThere': '去处理',

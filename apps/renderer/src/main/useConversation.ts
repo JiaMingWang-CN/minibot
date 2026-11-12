@@ -19,6 +19,27 @@ export interface Streaming {
   reasoning: string;
 }
 
+type ApprovalItem = ApprovalRequest & { result?: ApprovalResult };
+
+/**
+ * 合并待审批：以响应为准，但响应发出（序号 mark）之后才由事件加入、响应里没有、还没处理的保留，
+ * 否则卡片消失而那一轮一直等着。响应期间已被事件处理掉的，保留本地的“已处理”状态。
+ */
+function mergePendingApprovals(
+  list: ApprovalItem[],
+  pending: ApprovalRequest[],
+  seqById: ReadonlyMap<string, number>,
+  mark: number,
+): ApprovalItem[] {
+  const local = new Map(list.map((a) => [a.id, a]));
+  const merged: ApprovalItem[] = pending.map((a) => local.get(a.id) ?? a);
+  const ids = new Set(pending.map((a) => a.id));
+  for (const a of list) {
+    if (!ids.has(a.id) && a.result === undefined && (seqById.get(a.id) ?? 0) > mark) merged.push(a);
+  }
+  return merged;
+}
+
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
@@ -64,6 +85,8 @@ export function useConversation({
   const keepOffset = useRef<number | null>(null);
   const activeRef = useRef<string | null>(null);
   activeRef.current = activeId;
+  /** 事件加入审批的序号：同步待审批的请求发出后、响应回来前由事件加入的，不能被旧响应冲掉 */
+  const approvalSeq = useRef({ counter: 0, byId: new Map<string, number>() });
 
   const active = threads.find((th) => th.id === activeId) ?? null;
   const isRunning = activeId !== null && running.has(activeId);
@@ -94,7 +117,9 @@ export function useConversation({
           list = await refreshThreads();
         }
         setActiveId((current) => current ?? list[0]?.id ?? null);
-        setApprovals(await api.pendingApprovals());
+        const mark = approvalSeq.current.counter;
+        const pending = await api.pendingApprovals();
+        setApprovals((list) => mergePendingApprovals(list, pending, approvalSeq.current.byId, mark));
       } catch (err) {
         onError(errorText(err));
       }
@@ -134,13 +159,14 @@ export function useConversation({
         void (async () => {
           try {
             const threadId = activeRef.current;
+            const mark = approvalSeq.current.counter;
             const [runningIds, pending, latest] = await Promise.all([
               api.runningThreads(),
               api.pendingApprovals(),
               threadId === null ? Promise.resolve(null) : api.listMessages(threadId, undefined, PAGE_SIZE),
             ]);
             setRunning(new Set(runningIds));
-            setApprovals(pending);
+            setApprovals((list) => mergePendingApprovals(list, pending, approvalSeq.current.byId, mark));
             if (latest !== null && activeRef.current === threadId) {
               const firstNew = latest[0]?.id ?? Infinity;
               setMessages((list) => [...list.filter((m) => m.id < firstNew), ...latest]);
@@ -234,12 +260,17 @@ export function useConversation({
             );
             return;
           case 'approval_request':
-            setApprovals((list) => [...list, event.request]);
+            approvalSeq.current.counter += 1;
+            approvalSeq.current.byId.set(event.request.id, approvalSeq.current.counter);
+            setApprovals((list) => (list.some((a) => a.id === event.request.id) ? list : [...list, event.request]));
             return;
           case 'approval_resolved': {
             const result = event.result as ApprovalResult;
             setApprovals((list) => list.map((a) => (a.id === event.id ? { ...a, result } : a)));
-            setTimeout(() => setApprovals((list) => list.filter((a) => a.id !== event.id)), RESOLVED_LINGER_MS);
+            setTimeout(() => {
+              approvalSeq.current.byId.delete(event.id);
+              setApprovals((list) => list.filter((a) => a.id !== event.id));
+            }, RESOLVED_LINGER_MS);
             return;
           }
           case 'memory_changed':

@@ -331,6 +331,13 @@ test('新接口：发消息（含图片）、用量、搜索、改名、重试�
     const renamed = await json('PATCH', `/api/threads/${h.threadId}`, { title: '看图' });
     assert.equal(JSON.parse(renamed.text).title, '看图');
 
+    // 手机端通知用它取对话标题和所属 bot
+    const fetched = await json('GET', `/api/threads/${h.threadId}`);
+    assert.equal(fetched.status, 200);
+    assert.equal(JSON.parse(fetched.text).title, '看图');
+    assert.equal(JSON.parse(fetched.text).botId, h.botId);
+    assert.equal((await json('GET', '/api/threads/no-such-thread')).status, 404);
+
     const messages = JSON.parse((await json('GET', `/api/threads/${h.threadId}/messages`)).text);
     const image = messages[0].blocks.find((b: { type: string }) => b.type === 'image');
     const file = await request(h.server, { path: `/api/attachments/${image.id}` });

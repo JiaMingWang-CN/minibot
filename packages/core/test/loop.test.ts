@@ -425,6 +425,28 @@ test('模型生成的文本落库前经过脱敏', async () => {
   h.close();
 });
 
+test('Key 被切在两个流式增量之间也不会漏出；结束时放出剩余', async () => {
+  const key = 'sk-loop-secret-123456';
+  const h = await harness(async ({ onDelta }) => {
+    onDelta({ type: 'text', text: '前缀 sk-loop-sec' });
+    onDelta({ type: 'text', text: 'ret-123456 后缀 sk-lo' });
+    onDelta({ type: 'reasoning', text: '想 sk-loop' });
+    return {
+      blocks: [{ type: 'text', text: '前缀 x' }],
+      stopReason: 'end',
+      usage: { inputTokens: 1, outputTokens: 1 },
+    };
+  });
+  h.env.secrets.add(key);
+  await runTurn(h.deps, h.bot, h.threadId, '问', h.controller.signal);
+  const deltas = h.events.filter((e) => e.type === 'delta') as Extract<KernelEvent, { type: 'delta' }>[];
+  const textOf = (type: string): string => deltas.filter((e) => e.delta.type === type).map((e) => e.delta.text).join('');
+  assert.equal(textOf('text'), `前缀 ${REDACTED} 后缀 sk-lo`);
+  assert.equal(textOf('reasoning'), '想 sk-loop');
+  for (const e of deltas) assert.equal(e.delta.text.includes('sk-loop-sec'), false);
+  h.close();
+});
+
 test('系统提示词含人设、工作目录、user.md 全文、主题名与简介（无简介写 "无简介"）、首行约定 "> 简介："、"记住" 的写法', () => {
   const prompt = buildSystemPrompt({
     bot: { ...newBot('b1'), persona: '我是一名人设甲助理。' },

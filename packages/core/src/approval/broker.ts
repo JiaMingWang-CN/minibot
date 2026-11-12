@@ -10,6 +10,8 @@ export interface ApprovalRequest {
   createdAt: number;
   /** run_command 的命令原文 */
   command?: string;
+  /** write_file / edit_file 的内容预览（已截断、已脱敏）；不写进决策日志 */
+  preview?: string;
   /** 是否可以勾选“总是允许此命令”（只有简单命令可以） */
   canAlwaysAllow: boolean;
 }

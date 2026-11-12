@@ -231,8 +231,9 @@ export function makePrepareContext(
     }
 
     if (estimate > window * MID_TURN_RATIO) {
+      // 裁剪后的内容已不对应基线（基线里包含被裁掉的部分），判断时按内容估算，不带基线
       const trimmed = trimToolResults(context, window * TRIM_RATIO, system);
-      if (estimateTokens(system, trimmed, basis) <= window * MID_TURN_RATIO) return trimmed;
+      if (estimateTokens(system, trimmed) <= window * MID_TURN_RATIO) return trimmed;
 
       await compactThread(deps, bot, threadId, turnStartId, signal);
       onCompacted(threadId);
@@ -243,6 +244,9 @@ export function makePrepareContext(
           ? { inputTokens: updated.lastInputTokens, upToMsgId: updated.lastInputMsgId }
           : undefined;
       if (estimateTokens(system, context, basis) <= window * MID_TURN_RATIO) return context;
+      // 压缩了本轮之前的历史仍超限：本轮自身的工具输出再裁一次
+      const retrimmed = trimToolResults(context, window * TRIM_RATIO, system);
+      if (estimateTokens(system, retrimmed) <= window * MID_TURN_RATIO) return retrimmed;
       return null;
     }
 

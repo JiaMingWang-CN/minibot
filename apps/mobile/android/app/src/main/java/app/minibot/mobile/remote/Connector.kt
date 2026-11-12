@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONException
 import org.json.JSONObject
 
 enum class Via { LAN, RELAY }
@@ -319,16 +320,41 @@ class Connector(
 
     // —— 握手（在承载回调线程里同步完成，之后立刻换成信道的处理函数） ——
 
-    private fun finishHandshake(link: Link, hs: Handshake) {
+    private fun finishHandshake(link: Link, hs: Handshake, pairing: Boolean = false) {
         val (send, recv) = hs.split()
         val channel = SecureChannel(link.carrier, send, recv)
         link.channel = channel
         channel.onClose = { link.events.trySend(Ev.Closed(CloseReason.Network("信道已关闭"))) }
         channel.onMessage = { message ->
             if (message.optString("t") == "paired") link.events.trySend(Ev.Paired)
-            else onMessage(message)
+            else {
+                // 配对中的地址刚从配对码里拿到，不需要再更新
+                if (!pairing && message.optString("t") == "ready") applyReady(message)
+                onMessage(message)
+            }
         }
         link.events.trySend(Ev.Ready)
+    }
+
+    /**
+     * ready 里带电脑当前的局域网地址与端口；与已保存的不同就更新，电脑换 IP 后不必重新配对。
+     * 字段缺失（旧版电脑）或地址列表为空（电脑关了局域网）时保持原值。
+     */
+    private fun applyReady(message: JSONObject) {
+        try {
+            val current = store.load() ?: return
+            val array = message.optJSONArray("lan")
+            val addresses = if (array == null) emptyList() else List(array.length()) { array.getString(it) }
+            val lan = if (addresses.isEmpty()) current.lanAddresses else addresses
+            val port = message.optInt("port", current.lanPort).takeIf { it in 1..65535 } ?: current.lanPort
+            if (lan != current.lanAddresses || port != current.lanPort) {
+                store.save(current.copy(lanAddresses = lan, lanPort = port))
+            }
+        } catch (e: StoreUnavailableException) {
+            // 下次 ready 再更新
+        } catch (e: JSONException) {
+            // 格式不对就当没带
+        }
     }
 
     private fun failHandshake(link: Link, message: String) {
@@ -364,7 +390,7 @@ class Connector(
                     val hello = JSONObject().put("deviceName", deviceName).toString().toByteArray(Charsets.UTF_8)
                     val message = byteArrayOf(FRAME_PAIR) + hs.writeMessage(hello)
                     // 先装好信道再发：电脑收到后立刻回 paired / ready
-                    finishHandshake(link, hs)
+                    finishHandshake(link, hs, pairing = true)
                     link.carrier.send(message)
                 }
                 link.events.trySend(Ev.Ready)

@@ -39,9 +39,11 @@ interface Harness {
 
 async function setup(opts: {
   now?: number;
-  reply: (request: ModelRequest) => string | Promise<string>;
+  reply: (request: ModelRequest, signal: AbortSignal) => string | Promise<string>;
   consolidationModel?: { providerId: string; model: string } | null;
   running?: Set<string>;
+  contextWindow?: number;
+  maxOutputTokens?: number;
 }): Promise<Harness> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'minibot-consolidate-'));
   const paths = dataPaths(root);
@@ -64,7 +66,7 @@ async function setup(opts: {
     secrets,
     callModel: async (a) => {
       calls.push(a.request);
-      const text = await opts.reply(a.request);
+      const text = await opts.reply(a.request, a.signal);
       return {
         blocks: [{ type: 'text', text }],
         stopReason: 'end',
@@ -75,6 +77,8 @@ async function setup(opts: {
       provider,
       apiKey: 'sk-test-secret-123',
       model: opts.consolidationModel?.model ?? b.model,
+      contextWindow: opts.contextWindow ?? b.contextWindow,
+      maxOutputTokens: opts.maxOutputTokens ?? b.maxOutputTokens,
     }),
     loadBot: (id) => loadBot(paths, id),
     isThreadRunning: (id) => running.has(id),
@@ -298,8 +302,61 @@ test('提示词含 "合并重复" 与 "新事实与旧记录冲突时直接覆�
 test('start/stop 不抛错，且 scan 可重复调用', async () => {
   const h = await setup({ reply: () => replyJson(null, []) });
   h.consolidator.start();
-  h.consolidator.stop();
-  h.consolidator.stop();
   await h.consolidator.scan();
+  await h.consolidator.stop();
+  await h.consolidator.stop();
+  h.close();
+});
+
+test('增量过大时按批处理：每批只取放得进窗口的前一段，成功后推进到这批末尾，其余下次再整理', async () => {
+  const h = await setup({ reply: () => replyJson(null, []), contextWindow: 4000 });
+  const ids: number[] = [];
+  for (let i = 0; i < 10; i++) ids.push(h.add(`消息${i}${'a'.repeat(1750)}`));
+  await h.consolidator.consolidateThread(h.threadId);
+  const first = messageTexts(h.calls[0]!)[0]!;
+  assert.ok(first.includes('消息0') && !first.includes('消息9'));
+  const advanced = getThread(h.db, h.threadId)!.lastExtractedMsgId;
+  assert.ok(advanced > ids[0]! && advanced < ids[9]!);
+  await h.consolidator.consolidateThread(h.threadId);
+  const second = messageTexts(h.calls[1]!)[0]!;
+  assert.equal(second.includes('消息0'), false);
+  assert.ok(second.includes(`消息${ids.indexOf(advanced) + 1}`));
+  for (let i = 0; i < 5; i++) await h.consolidator.consolidateThread(h.threadId);
+  assert.equal(getThread(h.db, h.threadId)!.lastExtractedMsgId, ids[9]);
+  h.close();
+});
+
+test('maxTokens 用整理模型的上限，而不是 bot 的', async () => {
+  const h = await setup({ reply: () => replyJson(null, []), maxOutputTokens: 1234 });
+  h.add('聊天');
+  await h.consolidator.consolidateThread(h.threadId);
+  assert.equal(h.calls[0]!.maxTokens, 1234);
+  h.close();
+});
+
+test('模型返回空白的 user 时不清空 user.md', async () => {
+  const h = await setup({ reply: () => replyJson('  \n', []) });
+  await fs.writeFile(h.paths.userMd, '用户喜欢咖啡', 'utf8');
+  h.add('聊天');
+  await h.consolidator.consolidateThread(h.threadId);
+  assert.equal(await fs.readFile(h.paths.userMd, 'utf8'), '用户喜欢咖啡');
+  h.close();
+});
+
+test('stop() 中止进行中的整理并等它结束，不推进进度', async () => {
+  const h = await setup({
+    reply: (_request, signal) =>
+      new Promise<string>((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(new Error('aborted')));
+      }),
+  });
+  h.add('聊天');
+  const job = h.consolidator.consolidateThread(h.threadId);
+  while (h.calls.length === 0) await new Promise((resolve) => setTimeout(resolve, 5));
+  await h.consolidator.stop();
+  await job;
+  assert.equal(getThread(h.db, h.threadId)!.lastExtractedMsgId, 0);
+  await h.consolidator.consolidateThread(h.threadId);
+  assert.equal(h.calls.length, 1);
   h.close();
 });

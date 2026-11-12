@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { KernelError } from '../src/kernel.ts';
 import type { CallModel } from '../src/model/client.ts';
 import { kernelHarness, textModel, waitFor, waitIdle } from './kernel-harness.ts';
+import { appendMessage } from '../src/db/messages.ts';
 
 test('线程改名：去掉首尾空白；空名或超过 100 字 → invalid；不存在 → not_found', async () => {
   const h = await kernelHarness();
@@ -82,4 +83,22 @@ test('搜索：通知类消息不进索引；特殊字符按字面匹配', async
   assert.equal(h.kernel.search('a"b*c').length, 1);
   assert.equal(h.kernel.search('已中断').length, 0);
   await h.close();
+});
+
+test('listMessages：limit 取整并夹到 1–200，before 非整数报 invalid', async () => {
+  const h = await kernelHarness();
+  try {
+    for (let i = 0; i < 3; i++) {
+      appendMessage(h.kernel['db'], { threadId: h.threadId, role: 'user', blocks: [{ type: 'text', text: String(i) }], kind: null, interrupted: false });
+    }
+    assert.equal(h.kernel.listMessages(h.threadId, undefined, -1).length, 1);
+    assert.equal(h.kernel.listMessages(h.threadId, undefined, 0).length, 1);
+    assert.equal(h.kernel.listMessages(h.threadId, undefined, 2.7).length, 2);
+    assert.equal(h.kernel.listMessages(h.threadId, undefined, 1000).length, 3);
+    assert.equal(h.kernel.listMessages(h.threadId, undefined, Number.NaN).length, 3);
+    assert.throws(() => h.kernel.listMessages(h.threadId, 1.5), (e: unknown) => e instanceof KernelError && e.code === 'invalid');
+    assert.throws(() => h.kernel.listMessages(h.threadId, Number.NaN), (e: unknown) => e instanceof KernelError && e.code === 'invalid');
+  } finally {
+    await h.close();
+  }
 });

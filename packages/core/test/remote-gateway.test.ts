@@ -19,6 +19,7 @@ async function setup(o: { now?: () => number; handshakeTimeoutMs?: number; model
   const gateway = new RemoteGateway(h.kernel, store, {
     ...(o.now !== undefined ? { now: o.now } : {}),
     ...(o.handshakeTimeoutMs !== undefined ? { handshakeTimeoutMs: o.handshakeTimeoutMs } : {}),
+    lanAddresses: () => ['192.168.1.2', '10.0.0.5'],
   });
   const connect = (via: 'lan' | 'relay' = 'lan'): { phoneSide: MemoryCarrier; closed: () => boolean } => {
     const { a, b } = carrierPair();
@@ -48,6 +49,18 @@ async function withSetup(fn: (s: Setup) => Promise<void>, o: Parameters<typeof s
     await s.teardown();
   }
 }
+
+test('gateway ready 带当前局域网地址与端口；局域网关闭时为空列表', () =>
+  withSetup(async (s) => {
+    const phone = await s.pair();
+    const ready = phone.messages.find((m) => m['t'] === 'ready')!;
+    assert.deepEqual(ready['lan'], ['192.168.1.2', '10.0.0.5']);
+    assert.equal(ready['port'], s.store.config().lanPort);
+
+    await s.store.updateConfig({ lanEnabled: false });
+    const again = await TestPhone.connect(s.connect().phoneSide, phone.keys, phone.pcPublicKey);
+    assert.deepEqual(again.messages.find((m) => m['t'] === 'ready')!['lan'], []);
+  }));
 
 test('gateway 配对', () =>
   withSetup(async (s) => {

@@ -17,10 +17,10 @@ import {
   parseCustomModels,
   DEFAULT_MAX_OUTPUT_TOKENS,
 } from './config/config.ts';
-import { allowedThinkingLevels, defaultContextWindow, listPresets } from './config/presets.ts';
+import { allowedThinkingLevels, defaultContextWindow, findCustomModel, listPresets } from './config/presets.ts';
 import { atomicWriteFile } from './fs/atomic-write.ts';
 import { sha256, withPathLock } from './fs/lock.ts';
-import { openDb } from './db/db.ts';
+import { inTransaction, openDb } from './db/db.ts';
 import {
   createThread,
   findEmptyThread,
@@ -306,16 +306,25 @@ export class Kernel {
     provider: Provider;
     apiKey: string;
     model: string;
+    contextWindow: number;
+    maxOutputTokens: number;
   } {
     const configured = this.config.consolidationModel;
     if (configured !== null) {
       const provider = this.providerOrThrow(configured.providerId);
       const apiKey = this.keyFor(provider);
       if (apiKey === null) throw new KernelError('invalid', '后台整理供应商没有可用的 API Key');
-      return { provider, apiKey, model: configured.model };
+      return {
+        provider,
+        apiKey,
+        model: configured.model,
+        contextWindow: defaultContextWindow(provider, configured.model),
+        maxOutputTokens:
+          findCustomModel(provider, configured.model)?.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+      };
     }
     const base = this.resolveModel(bot);
-    return { ...base, model: bot.model };
+    return { ...base, model: bot.model, contextWindow: bot.contextWindow, maxOutputTokens: bot.maxOutputTokens };
   }
 
   private async loadBotOrThrow(id: string): Promise<Bot> {
@@ -598,6 +607,11 @@ export class Kernel {
     return findEmptyThread(this.db, botId) ?? createThread(this.db, botId, '新对话');
   }
 
+  /** 单个对话的信息（手机端通知用它取标题和所属 bot） */
+  thread(threadId: string): Thread {
+    return this.threadOrThrow(threadId);
+  }
+
   private threadOrThrow(threadId: string): Thread {
     const thread = getThread(this.db, threadId);
     if (thread === null) throw new KernelError('not_found', '线程不存在');
@@ -621,15 +635,22 @@ export class Kernel {
     await this.queue.whenIdle(threadId);
     this.steer.delete(threadId);
     if (getThread(this.db, threadId) === null) return;
-    const removed = deleteMessagesFrom(this.db, threadId, 0);
-    deleteThreadRow(this.db, threadId);
+    // 删消息与删线程行在一个事务里；deleteMessagesFrom 发现已在事务中会直接执行
+    const removed = inTransaction(this.db, () => {
+      const messages = deleteMessagesFrom(this.db, threadId, 0);
+      deleteThreadRow(this.db, threadId);
+      return messages;
+    });
     this.trackers.delete(threadId);
     await this.removeAttachments(removed);
     this.emit({ type: 'thread_deleted', threadId });
   }
 
   listMessages(threadId: string, before?: number, limit?: number): StoredMessage[] {
-    const options: ListMessagesOptions = { limit: limit ?? 50 };
+    if (before !== undefined && !Number.isInteger(before)) throw new KernelError('invalid', 'before 必须是整数');
+    // 小数取整；-1 在 SQLite 里等于不限，所以夹到 1–200
+    const size = limit === undefined || !Number.isFinite(limit) ? 50 : Math.min(Math.max(Math.floor(limit), 1), 200);
+    const options: ListMessagesOptions = { limit: size };
     if (before !== undefined) options.before = before;
     return listMessages(this.db, threadId, options);
   }
@@ -1052,7 +1073,8 @@ export class Kernel {
     this.closed = true;
     this.queue.abortAll();
     await Promise.allSettled([...this.pendingJobs]);
-    this.consolidator.stop();
+    // 整理在数据库关闭后还可能写记忆文件：先中止并等它结束
+    await this.consolidator.stop();
     this.db.close();
   }
 }

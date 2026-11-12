@@ -132,7 +132,7 @@ async function responsesParse(
         hasToolCall = true;
         if (typeof item.id === 'string' && typeof item.name === 'string') acc.toolStart(item.id, item.name);
         if (typeof item.arguments === 'string' && item.arguments.length > 0) {
-          acc.toolArgs(item.id ?? '', item.arguments);
+          acc.toolArgsFull(item.id ?? '', item.arguments);
         }
         acc.stop('tool_use');
       }
@@ -148,7 +148,7 @@ async function responsesParse(
         hasToolCall = true;
         if (typeof item.id === 'string' && typeof item.name === 'string') acc.toolStart(item.id, item.name);
         if (typeof item.arguments === 'string' && item.arguments.length > 0) {
-          acc.toolArgs(item.id ?? '', item.arguments);
+          acc.toolArgsFull(item.id ?? '', item.arguments);
         }
         acc.stop('tool_use');
       }

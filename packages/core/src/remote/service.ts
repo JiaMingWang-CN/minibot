@@ -69,7 +69,7 @@ export class RemoteService {
       crypto: o.crypto,
       ...(o.platform !== undefined ? { platform: o.platform } : {}),
     });
-    const gateway = new RemoteGateway(kernel, store);
+    const gateway = new RemoteGateway(kernel, store, { lanAddresses });
     const service = new RemoteService(store, gateway, o.relayBackoffMs);
     gateway.on(() => {
       service.emit();

@@ -39,6 +39,8 @@ class ConnectorTest {
         val behavior: Behavior = Behavior.PC_OK,
         val peerEvents: List<Pair<Long, Boolean>> = emptyList(),
         val startOnline: Boolean = true,
+        /** 电脑 ready 消息里额外带的字段（lan / port） */
+        val readyExtra: Map<String, Any> = emptyMap(),
     )
 
     /** 电脑一端：把手机发来的帧当作电脑网关来应答 */
@@ -59,7 +61,9 @@ class ConnectorTest {
             val (send, recv) = hs.split()
             val channel = SecureChannel(this, send, recv)
             channel.onMessage = { received.add(it) }
-            channel.send(JSONObject().put("t", "ready").put("pcName", "测试电脑"))
+            val ready = JSONObject().put("t", "ready").put("pcName", "测试电脑")
+            for ((key, value) in phoneEnd.script.readyExtra) ready.put(key, value)
+            channel.send(ready)
         }
     }
 
@@ -242,6 +246,31 @@ class ConnectorTest {
         advanceTimeBy(100)
         // PcEnd 在握手完成后立刻发了 ready：与握手最后一帧几乎同时到达，不能丢
         assertEquals("ready", got.single().getString("t"))
+    }
+
+    @Test
+    fun readyWithNewAddressUpdatesSavedPairing() = runTest {
+        val extra = mapOf("lan" to org.json.JSONArray(listOf("192.168.9.9")), "port" to 4591)
+        val factory = Factory(backgroundScope, relay = Script(0, readyExtra = extra))
+        val store = MemoryPairingStore(pairing(lan = listOf("192.168.1.5"), relay = "wss://r/v1"), phone)
+        val c = connector(pairing(), factory, store)
+        c.start()
+        advanceTimeBy(2000)
+        assertEquals(listOf("192.168.9.9"), store.load()!!.lanAddresses)
+        assertEquals(4591, store.load()!!.lanPort)
+    }
+
+    @Test
+    fun readyWithoutOrWithEmptyAddressKeepsSavedPairing() = runTest {
+        for (extra in listOf(emptyMap(), mapOf("lan" to org.json.JSONArray(), "port" to 4591))) {
+            val factory = Factory(backgroundScope, relay = Script(0, readyExtra = extra))
+            val store = MemoryPairingStore(pairing(lan = listOf("192.168.1.5"), relay = "wss://r/v1"), phone)
+            val c = connector(pairing(), factory, store)
+            c.start()
+            advanceTimeBy(2000)
+            assertEquals(listOf("192.168.1.5"), store.load()!!.lanAddresses)
+            c.stop()
+        }
     }
 
     /** 一台电脑、一次配对邀请：第一条有效的第三条握手消息作废邀请，之后的一律正常关闭（同电脑端网关） */

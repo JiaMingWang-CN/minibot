@@ -3,10 +3,11 @@ import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { openDb } from '../src/db/db.ts';
+import { inTransaction, openDb } from '../src/db/db.ts';
 import { createThread, getThread, listThreads, updateThread } from '../src/db/threads.ts';
 import {
   appendMessage,
+  deleteMessagesFrom,
   listMessages,
   messagesFrom,
   getMessage,
@@ -123,5 +124,33 @@ test('updateThread 只更新给定字段', async () => {
   assert.equal(got.summaryMsgId, 7);
   assert.equal(got.lastInputTokens, 100);
   assert.equal(got.lastExtractedMsgId, 0);
+  db.close();
+});
+
+test('appendMessage：全文索引写入失败时消息一起回滚', async () => {
+  const db = openDb(await tmpDbPath());
+  const thread = createThread(db, 'b1', 't');
+  db.exec('DROP TABLE messages_fts');
+  assert.throws(() =>
+    appendMessage(db, { threadId: thread.id, role: 'user', blocks: [{ type: 'text', text: '内容' }], kind: null, interrupted: false }),
+  );
+  assert.equal(messagesFrom(db, thread.id, 0).length, 0);
+  assert.equal(db.isTransaction, false);
+  db.close();
+});
+
+test('deleteMessagesFrom：索引删除失败时消息保留；inTransaction 嵌套不重复 BEGIN', async () => {
+  const db = openDb(await tmpDbPath());
+  const thread = createThread(db, 'b1', 't');
+  appendMessage(db, { threadId: thread.id, role: 'user', blocks: [{ type: 'text', text: '内容' }], kind: null, interrupted: false });
+  inTransaction(db, () => {
+    assert.equal(deleteMessagesFrom(db, thread.id, 0).length, 1);
+  });
+  assert.equal(messagesFrom(db, thread.id, 0).length, 0);
+
+  appendMessage(db, { threadId: thread.id, role: 'user', blocks: [{ type: 'text', text: '内容' }], kind: null, interrupted: false });
+  db.exec('DROP TABLE messages_fts');
+  assert.throws(() => deleteMessagesFrom(db, thread.id, 0));
+  assert.equal(messagesFrom(db, thread.id, 0).length, 1);
   db.close();
 });

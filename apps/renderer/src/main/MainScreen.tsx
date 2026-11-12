@@ -71,7 +71,9 @@ export function MainScreen({
   const [renaming, setRenaming] = useState<Thread | null>(null);
   const [deleting, setDeleting] = useState<Thread | null>(null);
   const [failure, setFailure] = useState<string | null>(secretsUnreadable ? t('app.secretsUnreadable') : null);
-const currentProvider = providers.find((p) => p.id === bot.providerId);  const visionOk = specOf(currentProvider, presets.find((x) => x.id === currentProvider?.presetId), bot.model).vision;  const composer = useComposerImages({ visionOk, model: bot.model });
+  const currentProvider = providers.find((p) => p.id === bot.providerId);
+  const visionOk = specOf(currentProvider, presets.find((x) => x.id === currentProvider?.presetId), bot.model).vision;
+  const composer = useComposerImages({ visionOk, model: bot.model });
   const {
     threads,
     activeId,

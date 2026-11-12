@@ -48,6 +48,13 @@ export function ApprovalCard({
       {request.command !== undefined && (
         <pre className="overflow-x-auto rounded-lg bg-inset px-3 py-2 font-mono text-[12px] whitespace-pre-wrap">{request.command}</pre>
       )}
+      {request.preview !== undefined && (
+        <pre
+          aria-label={t('approval.preview')}
+          className="max-h-60 overflow-auto rounded-lg bg-inset px-3 py-2 font-mono text-[12px] whitespace-pre-wrap">
+          {request.preview}
+        </pre>
+      )}
       {done ? (
         <span role="status" className={cn('self-end text-[13px]', RESULT[result].tone)}>
           {t(RESULT[result].key)}

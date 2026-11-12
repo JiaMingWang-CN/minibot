@@ -3,6 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- 模型输出的 Markdown 可能带远程图片，不允许发任何外部请求（桌面端由本机服务的 CSP 头挡住）。
+         样式要 inline（React 的 style 属性）；图片只有 blob:（附件取回后转的）与 data:；
+         connect-src 留给 Capacitor 自身来源。 -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'" />
     <title>minibot</title>
   </head>
   <body>

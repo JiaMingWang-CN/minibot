@@ -30,6 +30,8 @@ interface Session {
 export interface GatewayOptions {
   now?: () => number;
   handshakeTimeoutMs?: number;
+  /** 当前的局域网地址；ready 里带给手机，让电脑换 IP 后手机能自己更新 */
+  lanAddresses?: () => string[];
 }
 
 export class RemoteGateway {
@@ -37,6 +39,7 @@ export class RemoteGateway {
   private readonly store: RemoteStore;
   private readonly now: () => number;
   private readonly handshakeTimeoutMs: number;
+  private readonly lanAddresses: () => string[];
   private offer: ActiveOffer | null = null;
   private offerTimer: NodeJS.Timeout | null = null;
   private readonly sessions = new Map<string, Set<Session>>();
@@ -49,6 +52,7 @@ export class RemoteGateway {
     this.store = store;
     this.now = o.now ?? Date.now;
     this.handshakeTimeoutMs = o.handshakeTimeoutMs ?? DEFAULT_HANDSHAKE_TIMEOUT_MS;
+    this.lanAddresses = o.lanAddresses ?? (() => []);
   }
 
   // —— 配对邀请 ——
@@ -273,7 +277,13 @@ export class RemoteGateway {
 
     void this.store.touch(deviceId, via).catch(() => {});
     if (pairedName !== null) channel.send({ t: 'paired', deviceId });
-    channel.send({ t: 'ready', pcName: this.store.config().pcName });
+    const config = this.store.config();
+    channel.send({
+      t: 'ready',
+      pcName: config.pcName,
+      lan: config.lanEnabled ? this.lanAddresses() : [],
+      port: config.lanPort,
+    });
     session.unsubscribe = this.kernel.on((event) => {
       if (event.type === 'memory_changed') return;
       channel.send({ t: 'evt', event });

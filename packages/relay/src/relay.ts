@@ -27,6 +27,8 @@ const MAX_PHONES_PER_ROUTE = 8;
 const IP_WINDOW_MS = 60_000;
 const IP_MAX_CONNECTIONS = 30;
 const PING_INTERVAL_MS = 25_000;
+/** 对端发送缓冲积压上限：超过就关掉那条连接，而不是无限缓存 */
+const MAX_BUFFERED_BYTES = 16 * 1024 * 1024;
 const PONG_TIMEOUT_MS = 60_000;
 const SESSION_ID_BYTES = 16;
 const HEX32 = /^[0-9a-f]{32}$/;
@@ -52,6 +54,10 @@ export interface RelayOptions {
   log?: (message: string) => void;
   /** 测试用，默认 5000 */
   helloTimeoutMs?: number;
+  /** 测试用，默认 25000 */
+  pingIntervalMs?: number;
+  /** 测试用，默认 16 MiB */
+  maxBufferedBytes?: number;
   /**
    * 部署在本机反代（如 Caddy）后面时打开：来自回环地址的连接按 X-Forwarded-For
    * 最右边一项（反代追加的真实客户端地址）限流，否则所有人都是 127.0.0.1。
@@ -61,6 +67,8 @@ export interface RelayOptions {
 
 export interface RelayHandle {
   port: number;
+  /** 测试用：限流表里当前记着的 IP 个数 */
+  trackedIps(): number;
   close(): Promise<void>;
 }
 
@@ -98,6 +106,7 @@ export async function startRelay(o: RelayOptions): Promise<RelayHandle> {
   const now = o.now ?? Date.now;
   const log = o.log ?? (() => {});
   const helloTimeoutMs = o.helloTimeoutMs ?? HELLO_TIMEOUT_MS;
+  const maxBuffered = o.maxBufferedBytes ?? MAX_BUFFERED_BYTES;
   const routes = new Map<string, Route>();
   const ipHits = new Map<string, number[]>();
   const lastPong = new WeakMap<WebSocket, number>();
@@ -110,6 +119,16 @@ export async function startRelay(o: RelayOptions): Promise<RelayHandle> {
     wss.once('error', reject);
   });
   wss.on('error', (err) => log(`中继错误：${err.message}`));
+
+  // 向对端转发；对端读得太慢、积压超限就关掉它（电脑重连、手机重新进入都会恢复）
+  const forward = (target: WebSocket, payload: Buffer): void => {
+    if (target.readyState !== target.OPEN) return;
+    if (target.bufferedAmount > maxBuffered) {
+      target.close(4408, 'backlog');
+      return;
+    }
+    target.send(payload, { binary: true });
+  };
 
   const rateLimited = (ip: string): boolean => {
     const t = now();
@@ -166,9 +185,7 @@ export async function startRelay(o: RelayOptions): Promise<RelayHandle> {
       if (buffer.length < SESSION_ID_BYTES) return;
       const sessionId = buffer.subarray(0, SESSION_ID_BYTES).toString('hex');
       const phone = route.phones.get(sessionId);
-      if (phone !== undefined && phone.readyState === phone.OPEN) {
-        phone.send(buffer.subarray(SESSION_ID_BYTES), { binary: true });
-      }
+      if (phone !== undefined) forward(phone, buffer.subarray(SESSION_ID_BYTES));
     });
 
     ws.on('close', () => {
@@ -201,9 +218,7 @@ export async function startRelay(o: RelayOptions): Promise<RelayHandle> {
       }
       if (!isBinary) return;
       const pc = route.pc;
-      if (pc !== null && pc.readyState === pc.OPEN) {
-        pc.send(Buffer.concat([sessionBytes, buffer]), { binary: true });
-      }
+      if (pc !== null) forward(pc, Buffer.concat([sessionBytes, buffer]));
     });
 
     ws.on('close', () => {
@@ -305,11 +320,16 @@ export async function startRelay(o: RelayOptions): Promise<RelayHandle> {
       }
       ws.ping();
     }
-  }, PING_INTERVAL_MS);
+    // 窗口内已没有命中的 IP 不再记着，否则公网中继的表只增不减
+    for (const [ip, hits] of ipHits) {
+      if (hits.every((h) => t - h >= IP_WINDOW_MS)) ipHits.delete(ip);
+    }
+  }, o.pingIntervalMs ?? PING_INTERVAL_MS);
   heartbeat.unref();
 
   return {
     port: (wss.address() as AddressInfo).port,
+    trackedIps: () => ipHits.size,
     close: async () => {
       clearInterval(heartbeat);
       for (const ws of wss.clients) ws.terminate();

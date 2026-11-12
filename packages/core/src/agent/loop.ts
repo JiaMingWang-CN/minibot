@@ -190,6 +190,15 @@ export async function runTurn(
 
       let result: AssistantResult | undefined;
       for (let attempt = 0; result === undefined; ) {
+        // Key 可能被切在两个增量之间：流式阶段按流缓冲脱敏，调用结束（成功或失败）时放出剩余
+        const stream = env.secrets.streamRedactor();
+        const emitDelta = (type: 'text' | 'reasoning', text: string): void => {
+          if (text.length > 0) deps.emit({ type: 'delta', threadId, delta: { type, text } });
+        };
+        const flushStream = (): void => {
+          emitDelta('text', stream.flush('text'));
+          emitDelta('reasoning', stream.flush('reasoning'));
+        };
         try {
           result = await deps.callModel({
             provider: modelInfo.provider,
@@ -204,15 +213,11 @@ export async function runTurn(
               ...(attachments !== undefined ? { attachments } : {}),
             },
             signal,
-            onDelta: (d) => {
-              deps.emit({
-                type: 'delta',
-                threadId,
-                delta: { type: d.type, text: env.secrets.redact(d.text) },
-              });
-            },
+            onDelta: (d) => emitDelta(d.type, stream.push(d.type, d.text)),
           });
+          flushStream();
         } catch (err) {
+          flushStream();
           const delayMs = retryDelays[attempt];
           if (delayMs !== undefined && isRetryable(err) && !signal.aborted) {
             attempt += 1;

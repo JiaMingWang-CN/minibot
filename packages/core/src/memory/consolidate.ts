@@ -3,7 +3,8 @@ import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { Bot, Provider } from '../config/types.ts';
 import type { CallModel } from '../model/client.ts';
-import { transcriptMessage } from '../agent/transcript.ts';
+import { transcriptMessage, transcriptOf } from '../agent/transcript.ts';
+import { estimateChars } from '../agent/compaction.ts';
 import type { Block, StoredMessage } from '../model/types.ts';
 import { messagesFrom } from '../db/messages.ts';
 import { getThread, listThreads, updateThread } from '../db/threads.ts';
@@ -17,6 +18,11 @@ import type { KernelEvent } from '../events.ts';
 
 export const SCAN_INTERVAL_MS = 180_000;
 export const IDLE_MS = 600_000;
+
+/** 一批对话 + 系统提示 + 现有记忆最多占整理模型窗口的比例，其余留给输出与估算误差 */
+const WINDOW_USE_RATIO = 0.9;
+/** 给输出预留的窗口比例上限（maxOutputTokens 很大时不至于把输入挤没） */
+const OUTPUT_RESERVE_RATIO = 0.25;
 
 const PROMPT_RULES = `你是 minibot 的记忆整理助手。
 
@@ -40,7 +46,14 @@ export interface ConsolidatorDeps {
   revisions: MemoryRevisions;
   secrets: SecretSet;
   callModel: CallModel;
-  resolveConsolidationModel: (bot: Bot) => { provider: Provider; apiKey: string; model: string };
+  /** contextWindow / maxOutputTokens 是整理所用模型的，不一定是 bot 自己的 */
+  resolveConsolidationModel: (bot: Bot) => {
+    provider: Provider;
+    apiKey: string;
+    model: string;
+    contextWindow: number;
+    maxOutputTokens: number;
+  };
   loadBot: (id: string) => Promise<Bot>;
   isThreadRunning: (id: string) => boolean;
   emit: (e: KernelEvent) => void;
@@ -116,6 +129,8 @@ export class Consolidator {
   private timer: NodeJS.Timeout | undefined;
   private failed = new Map<string, number>();
   private runningBots = new Set<string>();
+  private abort = new AbortController();
+  private inflight = new Set<Promise<void>>();
 
   constructor(deps: ConsolidatorDeps) {
     this.deps = deps;
@@ -131,15 +146,19 @@ export class Consolidator {
     this.timer.unref?.();
   }
 
-  stop(): void {
+  /** 停止定时扫描、中止进行中的整理并等它结束；之后不再接受新的整理 */
+  async stop(): Promise<void> {
     if (this.timer !== undefined) clearInterval(this.timer);
     this.timer = undefined;
+    this.abort.abort();
+    await Promise.allSettled([...this.inflight]);
   }
 
   async scan(): Promise<void> {
     const now = (this.deps.now ?? Date.now)();
     const bots = await listBots(this.deps.paths);
     for (const bot of bots) {
+      if (this.abort.signal.aborted) return;
       if (!bot.memoryEnabled) continue;
       for (const thread of listThreads(this.deps.db, bot.id)) {
         const latest = latestMessageId(this.deps.db, thread.id);
@@ -163,23 +182,40 @@ export class Consolidator {
   }
 
   async consolidateThread(threadId: string): Promise<void> {
+    if (this.abort.signal.aborted) return;
+    const job = this.consolidateOnce(threadId);
+    this.inflight.add(job);
+    try {
+      await job;
+    } finally {
+      this.inflight.delete(job);
+    }
+  }
+
+  private async consolidateOnce(threadId: string): Promise<void> {
     const thread = getThread(this.deps.db, threadId);
     if (thread === null) return;
     const bot = await this.deps.loadBot(thread.botId);
     if (!bot.memoryEnabled) return;
-    const incremental = messagesFrom(this.deps.db, threadId, thread.lastExtractedMsgId + 1);
-    if (incremental.length === 0) return;
-    const latestId = incremental[incremental.length - 1]!.id;
+    const all = messagesFrom(this.deps.db, threadId, thread.lastExtractedMsgId + 1);
+    if (all.length === 0) return;
+    const latestId = all[all.length - 1]!.id;
 
+    let incremental: StoredMessage[];
     let replyText: string;
     let files: MemoryFile[];
     try {
+      const info = this.deps.resolveConsolidationModel(bot);
       files = await this.readMemoryFiles(bot);
-      replyText = await this.callConsolidationModel(bot, incremental, files);
+      incremental = takeBatch(all, info.contextWindow, info.maxOutputTokens, this.systemPrompt(bot, files));
+      replyText = await this.callConsolidationModel(bot, incremental, files, info);
     } catch {
       this.failed.set(threadId, latestId);
       return;
     }
+    // 这一批的末尾；超长的增量剩下的部分留给下次扫描
+    const batchEndId = incremental[incremental.length - 1]!.id;
+    if (this.abort.signal.aborted) return;
 
     const reply = parseReply(replyText);
     if (reply === null) {
@@ -202,7 +238,7 @@ export class Consolidator {
     }
 
     if (!conflict) {
-      updateThread(this.deps.db, threadId, { lastExtractedMsgId: latestId });
+      updateThread(this.deps.db, threadId, { lastExtractedMsgId: batchEndId });
       this.failed.delete(threadId);
     }
   }
@@ -219,11 +255,7 @@ export class Consolidator {
     return files;
   }
 
-  private async callConsolidationModel(
-    bot: Bot,
-    incremental: StoredMessage[],
-    files: MemoryFile[],
-  ): Promise<string> {
+  private systemPrompt(bot: Bot, files: MemoryFile[]): string {
     const memoryDir = this.deps.paths.memoryDir(bot.id);
     const fileText = files
       .map((f) => {
@@ -234,13 +266,21 @@ export class Consolidator {
         return `=== ${label} ===\n${f.content}`;
       })
       .join('\n\n');
-    const info = this.deps.resolveConsolidationModel(bot);
+    return `${PROMPT_RULES}\n\n现有记忆文件：\n${fileText}`;
+  }
+
+  private async callConsolidationModel(
+    bot: Bot,
+    incremental: StoredMessage[],
+    files: MemoryFile[],
+    info: { provider: Provider; apiKey: string; model: string; maxOutputTokens: number },
+  ): Promise<string> {
     const result = await this.deps.callModel({
       provider: info.provider,
       apiKey: info.apiKey,
       request: {
         model: info.model,
-        system: `${PROMPT_RULES}\n\n现有记忆文件：\n${fileText}`,
+        system: this.systemPrompt(bot, files),
         messages: [
           transcriptMessage(
             incremental[0]?.threadId ?? '',
@@ -249,10 +289,10 @@ export class Consolidator {
           ),
         ],
         tools: [],
-        maxTokens: bot.maxOutputTokens,
+        maxTokens: info.maxOutputTokens,
         thinkingLevel: null,
       },
-      signal: new AbortController().signal,
+      signal: this.abort.signal,
       onDelta: () => {},
     });
     return result.blocks
@@ -263,7 +303,7 @@ export class Consolidator {
 
   private validateTargets(bot: Bot, reply: ConsolidationReply): WriteTarget[] {
     const targets: WriteTarget[] = [];
-    if (reply.user !== null && !this.deps.secrets.containsKnown(reply.user)) {
+    if (reply.user !== null && reply.user.trim().length > 0 && !this.deps.secrets.containsKnown(reply.user)) {
       targets.push({ path: this.deps.paths.userMd, content: reply.user });
     }
     const memoryDir = this.deps.paths.memoryDir(bot.id);
@@ -279,6 +319,25 @@ export class Consolidator {
     }
     return targets;
   }
+}
+
+/** 从增量开头取一段放得进整理模型窗口的消息（至少一条）；超出的留给下次 */
+function takeBatch(
+  messages: StoredMessage[],
+  contextWindow: number,
+  maxOutputTokens: number,
+  system: string,
+): StoredMessage[] {
+  const reserve = Math.min(maxOutputTokens, contextWindow * OUTPUT_RESERVE_RATIO);
+  let budget = contextWindow * WINDOW_USE_RATIO - reserve - estimateChars(system);
+  const batch: StoredMessage[] = [];
+  for (const message of messages) {
+    const size = estimateChars(transcriptOf([message]));
+    if (batch.length > 0 && size > budget) break;
+    batch.push(message);
+    budget -= size;
+  }
+  return batch;
 }
 
 function latestMessageId(db: DatabaseSync, threadId: string): number | null {

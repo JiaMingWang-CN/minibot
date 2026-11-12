@@ -192,6 +192,25 @@ function summarize(name: string, input: Record<string, unknown>, real: string): 
   return `执行命令：${String(input['command'])}`;
 }
 
+const PREVIEW_MAX_CHARS = 4000;
+
+function clipPreview(text: string): string {
+  return text.length > PREVIEW_MAX_CHARS
+    ? `${text.slice(0, PREVIEW_MAX_CHARS)}\n…[已截断，共 ${text.length} 字符]`
+    : text;
+}
+
+/** 审批卡片上的内容预览：write_file 是要写入的内容，edit_file 是旧文本与新文本 */
+function previewOf(name: string, input: Record<string, unknown>, redact: (text: string) => string): string | undefined {
+  if (name === 'write_file') return clipPreview(redact(input['content'] as string));
+  if (name === 'edit_file') {
+    const oldText = clipPreview(redact(input['old_string'] as string));
+    const newText = clipPreview(redact(input['new_string'] as string));
+    return `旧文本：\n${oldText}\n\n新文本：\n${newText}`;
+  }
+  return undefined;
+}
+
 export async function executeTool(
   call: Extract<Block, { type: 'tool_use' }>,
   env: ToolEnv,
@@ -236,12 +255,14 @@ export async function executeTool(
     if (decide(env.bot.approvalMode, toolName, classes) === 'ask') {
       const command = call.name === 'run_command' ? (input['command'] as string) : undefined;
       const simple = command !== undefined && isSimpleCommand(command);
+      const preview = previewOf(call.name, input, (text) => env.secrets.redact(text));
       const request = {
         botId: env.bot.id,
         threadId: env.threadId,
         tool: toolName,
         summary: summarize(call.name, input, real),
         ...(command !== undefined ? { command } : {}),
+        ...(preview !== undefined ? { preview } : {}),
       };
       const allowlisted =
         simple &&

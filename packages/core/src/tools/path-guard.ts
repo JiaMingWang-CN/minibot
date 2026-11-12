@@ -71,13 +71,14 @@ export function classifyPath(real: string, ctx: ClassifyContext): PathClass {
   if (isInside(real, ctx.paths.secrets, platform) || isInside(real, ctx.paths.config, platform)) {
     return 'sensitive';
   }
-  if (isInside(real, ctx.paths.root, platform)) {
-    const base = path.basename(real).toLowerCase();
-    if (base.startsWith('minibot.db')) return 'sensitive';
-  }
   if (isInside(real, path.join(ctx.home, '.ssh'), platform)) return 'sensitive';
   if (isInside(real, ctx.paths.userMd, platform)) return 'own_memory';
   if (isInside(real, ctx.paths.memoryDir(ctx.botId), platform)) return 'own_memory';
+  // 本 bot 没设工作目录时用的默认工作区在数据目录里面，照常算工作区
+  if (isInside(real, ctx.paths.defaultWorkspace(ctx.botId), platform)) return 'workspace';
+  // 数据目录里其余一切（bot.json、devices.json、remote.json、数据库等）都敏感；
+  // 必须先于“是否在工作区内”判断，否则工作区设成主目录时会把它们当普通文件
+  if (isInside(real, ctx.paths.root, platform)) return 'sensitive';
   if (isInside(real, ctx.workspace, platform)) return 'workspace';
   return 'outside';
 }

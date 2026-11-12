@@ -11,6 +11,23 @@ function hasTable(db: DatabaseSync, name: string): boolean {
   return db.prepare("SELECT 1 FROM sqlite_master WHERE name = ?").get(name) !== undefined;
 }
 
+/**
+ * 在事务里执行 fn：抛错就回滚。DatabaseSync 不支持嵌套 BEGIN，
+ * 已经在事务中（调用方外层包了事务）就直接执行，由外层统一提交 / 回滚。
+ */
+export function inTransaction<T>(db: DatabaseSync, fn: () => T): T {
+  if (db.isTransaction) return fn();
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const result = fn();
+    db.exec('COMMIT');
+    return result;
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+
 export function openDb(file: string): DatabaseSync {
   const db = new DatabaseSync(file, { timeout: 5000 });
   db.exec('PRAGMA journal_mode=WAL');

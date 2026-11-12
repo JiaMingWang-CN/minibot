@@ -181,6 +181,41 @@ test('裁剪后仍 > 0.9×窗口 → 对本轮开始之前的消息做中途摘�
   h.close();
 });
 
+test('带基线时，裁剪结果按内容估算：裁掉基线之前的内容有效，不触发摘要', async () => {
+  const h = await setup(1000);
+  h.add('user', [text('go')]);
+  h.add('assistant', [{ type: 'tool_use', id: 'tu_1', name: 'read_file', input: { path: 'big.txt' } }]);
+  const big = h.add('user', [
+    { type: 'tool_result', toolUseId: 'tu_1', content: 'z'.repeat(5000), status: 'ok' },
+  ]);
+  h.add('assistant', [text('好')]);
+  updateThread(h.db, h.threadId, { lastInputTokens: 950, lastInputMsgId: big.id });
+  const prepare = makePrepareContext(h.deps, () => {});
+  const context = await prepare(h.threadId, h.bot, new AbortController().signal, 999);
+  assert.ok(context !== null);
+  assert.ok(context!.every((m) => m.kind !== 'summary'));
+  assert.equal(h.calls.length, 0);
+  h.close();
+});
+
+test('压缩本轮之前的历史后仍超限 → 再裁剪本轮的工具输出，而不是直接返回 null', async () => {
+  const h = await setup(1000);
+  h.add('user', [text('x'.repeat(5000))]);
+  h.add('assistant', [text('ok')]);
+  const turnStart = h.add('user', [text('继续')]);
+  h.add('assistant', [{ type: 'tool_use', id: 'tu_1', name: 'read_file', input: { path: 'a.txt' } }]);
+  h.add('user', [{ type: 'tool_result', toolUseId: 'tu_1', content: 'z'.repeat(3500), status: 'ok' }]);
+  const prepare = makePrepareContext(h.deps, () => {});
+  const context = await prepare(h.threadId, h.bot, new AbortController().signal, turnStart.id);
+  assert.ok(context !== null);
+  assert.equal(context![0]!.kind, 'summary');
+  const result = context!
+    .flatMap((m) => m.blocks)
+    .find((b) => b.type === 'tool_result') as Extract<Block, { type: 'tool_result' }>;
+  assert.equal(result.content, TRIM_PLACEHOLDER);
+  h.close();
+});
+
 test('仍放不下 → 返回 null', async () => {
   const h = await setup(1000);
   h.add('user', [text('x'.repeat(5000))]);

@@ -155,3 +155,31 @@ test('auto 模式下敏感路径仍需审批', async () => {
   await promise;
   close();
 });
+
+test('审批请求带内容预览：write_file 是写入内容，edit_file 是旧/新文本；脱敏、截断', async () => {
+  const { env, broker, close } = await setup();
+  env.bot.approvalMode = 'ask';
+  env.secrets.add('sk-preview-secret-123');
+
+  const writing = executeTool(call('write_file', { path: 'w.txt', content: `key=sk-preview-secret-123\n${'a'.repeat(6000)}` }), env);
+  const writeRequest = await waitForPending(broker);
+  assert.ok(writeRequest.preview!.startsWith(`key=${REDACTED}`));
+  assert.ok(!writeRequest.preview!.includes('sk-preview-secret-123'));
+  assert.ok(writeRequest.preview!.includes('已截断'));
+  assert.ok(writeRequest.preview!.length < 4200);
+  broker.respond(writeRequest.id, false);
+  await writing;
+
+  const editing = executeTool(call('edit_file', { path: 'w.txt', old_string: '旧的', new_string: '新的' }), env);
+  const editRequest = await waitForPending(broker);
+  assert.ok(editRequest.preview!.includes('旧的') && editRequest.preview!.includes('新的'));
+  broker.respond(editRequest.id, false);
+  await editing;
+
+  const running = executeTool(call('run_command', { command: 'echo hi' }), env);
+  const commandRequest = await waitForPending(broker);
+  assert.equal(commandRequest.preview, undefined);
+  broker.respond(commandRequest.id, false);
+  await running;
+  close();
+});

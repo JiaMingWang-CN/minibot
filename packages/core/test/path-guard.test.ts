@@ -7,7 +7,9 @@ import { dataPaths } from '../src/paths.ts';
 import { resolveReal, isInside, classifyPath, type ClassifyContext } from '../src/tools/path-guard.ts';
 
 async function setup(): Promise<{ root: string; ws: string; ctx: ClassifyContext }> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'minibot-path-'));
+  const outer = await fs.mkdtemp(path.join(os.tmpdir(), 'minibot-path-'));
+  const root = path.join(outer, 'data');
+  await fs.mkdir(root, { recursive: true });
   const paths = dataPaths(root);
   const ws = paths.defaultWorkspace('b1');
   await fs.mkdir(ws, { recursive: true });
@@ -22,13 +24,13 @@ async function setup(): Promise<{ root: string; ws: string; ctx: ClassifyContext
 
 test('../ 越界', async () => {
   const { ws, ctx } = await setup();
-  const real = await resolveReal('../x', ws, ctx.home);
+  const real = await resolveReal('../../../x', ws, ctx.home);
   assert.equal(classifyPath(real, ctx), 'outside');
 });
 
 test('软链接 / junction 逃逸', async () => {
   const { root, ws, ctx } = await setup();
-  const outsideDir = path.join(root, 'outside-dir');
+  const outsideDir = path.join(path.dirname(root), 'outside-dir');
   await fs.mkdir(outsideDir, { recursive: true });
   const link = path.join(ws, 'link');
   if (process.platform === 'win32') await fs.symlink(outsideDir, link, 'junction');
@@ -69,11 +71,25 @@ test('minibot.db、-wal、-shm、-journal 都是 sensitive', async () => {
   }
 });
 
-test('记忆白名单：本 bot 记忆与 user.md 为 own_memory，其他 bot 的目录为 outside', async () => {
+test('记忆白名单：本 bot 记忆与 user.md 为 own_memory，其他 bot 的目录为 sensitive', async () => {
   const { ctx } = await setup();
   assert.equal(classifyPath(ctx.paths.userMd, ctx), 'own_memory');
   assert.equal(classifyPath(path.join(ctx.paths.memoryDir('b1'), '工作.md'), ctx), 'own_memory');
-  assert.equal(classifyPath(path.join(ctx.paths.memoryDir('b2'), 'x.md'), ctx), 'outside');
+  assert.equal(classifyPath(path.join(ctx.paths.memoryDir('b2'), 'x.md'), ctx), 'sensitive');
+});
+
+test('工作区 = 主目录、数据目录在其下：数据目录内的配置文件都是 sensitive', async () => {
+  const { root, ctx } = await setup();
+  const home = path.join(root, 'home');
+  const dataRoot = dataPaths(path.join(home, '.minibot'));
+  const c: ClassifyContext = { ...ctx, paths: dataRoot, workspace: home, home };
+  for (const f of [dataRoot.botJson('b1'), dataRoot.devicesJson, dataRoot.remoteJson, dataRoot.remoteKey]) {
+    assert.equal(classifyPath(f, c), 'sensitive', f);
+  }
+  assert.equal(classifyPath(path.join(dataRoot.defaultWorkspace('b1'), 'a.txt'), c), 'workspace');
+  assert.equal(classifyPath(path.join(dataRoot.memoryDir('b1'), 'a.md'), c), 'own_memory');
+  assert.equal(classifyPath(dataRoot.userMd, c), 'own_memory');
+  assert.equal(classifyPath(path.join(home, 'docs', 'a.txt'), c), 'workspace');
 });
 
 test('默认工作目录在 dataRoot 之内，仍分类为 workspace', async () => {

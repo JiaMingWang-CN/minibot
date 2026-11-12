@@ -223,6 +223,9 @@ async function route(kernel: Kernel, req: ApiRequest, ctx: DispatchContext): Pro
   match = /^\/api\/threads\/([^/]+)$/.exec(pathname);
   if (match !== null) {
     const id = decodeURIComponent(match[1]!);
+    if (method === 'GET') {
+      return json(200, kernel.thread(id));
+    }
     if (method === 'PATCH') {
       const body = objectBody(await req.readBody(MAX_BODY_BYTES));
       return json(200, kernel.renameThread(id, stringField(body, 'title')));

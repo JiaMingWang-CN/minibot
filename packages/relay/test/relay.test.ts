@@ -9,6 +9,7 @@ import {
   diffieHellman,
   generateKeyPairSync,
 } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { WebSocket } from 'ws';
 import { startRelay, type RelayHandle } from '../src/relay.ts';
 
@@ -235,7 +236,7 @@ test('relay 限流', async () => {
 });
 
 test('relay 启动校验', () => {
-  const result = spawnSync(process.execPath, [new URL('../src/main.ts', import.meta.url).pathname], {
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL('../src/main.ts', import.meta.url))], {
     env: { ...process.env, RELAY_TOKEN: 'short', RELAY_PORT: '0' },
     encoding: 'utf8',
     timeout: 10000,
@@ -290,4 +291,43 @@ test('relay 冒充电脑：迟迟不答挑战', async () => {
     const fake = await connect(relay, hello('pc'), { prove: null });
     assert.equal(await fake.closed, 4400);
   }, 150);
+});
+
+test('relay 心跳清掉窗口内没有命中的 IP', async () => {
+  let t = 1_000_000;
+  const relay = await startRelay({ host: '127.0.0.1', port: 0, token: TOKEN, now: () => t, pingIntervalMs: 20 });
+  try {
+    const c = await connect(relay, hello('phone'));
+    await waitFor(() => types(c).includes('welcome'));
+    assert.equal(relay.trackedIps(), 1);
+    c.ws.close();
+    await c.closed;
+    t += 61_000;
+    await waitFor(() => relay.trackedIps() === 0);
+  } finally {
+    await relay.close();
+  }
+});
+
+test('relay 对端积压超过上限就关掉那条连接', async () => {
+  const relay = await startRelay({ host: '127.0.0.1', port: 0, token: TOKEN, maxBufferedBytes: 256 * 1024 });
+  try {
+    const pc = await connect(relay, hello('pc'));
+    await waitFor(() => types(pc).includes('welcome'));
+    const phone = await connect(relay, hello('phone'));
+    await waitFor(() => types(pc).includes('session_open'));
+    const sessionId = Buffer.from(String(pc.texts.find((t) => t['type'] === 'session_open')!['sessionId']), 'hex');
+    // 手机不读：暂停它的 socket，电脑一直往手机发
+    (phone.ws as unknown as { _socket: { pause(): void } })._socket.pause();
+    const frame = Buffer.concat([sessionId, Buffer.alloc(60_000, 1)]);
+    for (let i = 0; i < 1500; i++) {
+      pc.ws.send(frame);
+      if (i % 20 === 0) await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    // 积压超限后中继已关闭那条连接；恢复读取，客户端才看得到关闭帧
+    (phone.ws as unknown as { _socket: { resume(): void } })._socket.resume();
+    assert.equal(await phone.closed, 4408);
+  } finally {
+    await relay.close();
+  }
 });

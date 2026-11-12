@@ -36,6 +36,22 @@ test('一个 Key 是另一个的前缀时，先替换长的', () => {
   assert.equal(s.redact('x abcdefgh123 y'), `x ${REDACTED} y`);
 });
 
+test('流式脱敏：没有 Key 时透传；Key 跨增量时不放出前缀；flush 放出剩余', () => {
+  const none = new SecretSet().streamRedactor();
+  assert.equal(none.push('text', 'sk-abc'), 'sk-abc');
+
+  const s = new SecretSet();
+  s.add('sk-12345678');
+  const r = s.streamRedactor();
+  assert.equal(r.push('text', 'a sk-123'), 'a ');
+  assert.equal(r.push('reasoning', 'sk-1'), '');
+  assert.equal(r.push('text', '45678 b'), `${REDACTED} b`);
+  assert.equal(r.flush('reasoning'), 'sk-1');
+  assert.equal(r.push('text', 'sk-1'), '');
+  assert.equal(r.push('text', 'x'), 'sk-1x');
+  assert.equal(r.flush('text'), '');
+});
+
 test('secrets.bin 不含明文 Key', async () => {
   const f = await tmpFile();
   const secrets = new SecretSet();
