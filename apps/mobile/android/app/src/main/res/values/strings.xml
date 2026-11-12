@@ -4,4 +4,24 @@
     <string name="title_activity_main">minibot</string>
     <string name="package_name">app.minibot.mobile</string>
     <string name="custom_url_scheme">app.minibot.mobile</string>
+
+    <string name="channel_connection">连接状态</string>
+    <string name="channel_approval">审批请求</string>
+    <string name="channel_done">任务完成</string>
+
+    <string name="conn_lan">已连接 %1$s · 局域网</string>
+    <string name="conn_relay">已连接 %1$s · 中继</string>
+    <string name="conn_pc_offline">电脑离线</string>
+    <string name="conn_reconnecting">正在重连</string>
+    <string name="conn_revoked">已被电脑撤销，请重新配对</string>
+    <string name="conn_idle">未连接</string>
+
+    <string name="approval_title">%1$s 请求批准</string>
+    <string name="approval_public">打开 minibot 查看</string>
+    <string name="done_title">%1$s 已完成</string>
+
+    <string name="scan_prompt">对准电脑上的配对二维码</string>
+    <string name="error_offline">电脑未连接</string>
+    <string name="error_timeout">电脑没有响应</string>
+    <string name="error_not_paired">尚未配对</string>
 </resources>

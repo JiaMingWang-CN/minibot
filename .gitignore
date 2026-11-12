@@ -9,3 +9,8 @@ apps/desktop/release/
 # 本地工具配置（与项目无关，不入库）
 .mcp.json
 .claude/settings.local.json
+
+# 手机端
+apps/mobile/dist/
+*.jks
+*.keystore

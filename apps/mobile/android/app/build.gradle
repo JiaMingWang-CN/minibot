@@ -1,4 +1,5 @@
 apply plugin: 'com.android.application'
+apply plugin: 'org.jetbrains.kotlin.android'
 
 android {
     namespace = "app.minibot.mobile"
@@ -16,11 +17,39 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
+    }
+    kotlinOptions {
+        jvmTarget = '21'
+    }
+    signingConfigs {
+        release {
+            // 签名信息只从环境变量读取；缺任何一个都让 release 构建失败，不回退到 debug 签名
+            def required = ['MINIBOT_KEYSTORE', 'MINIBOT_KEYSTORE_PASSWORD', 'MINIBOT_KEY_ALIAS', 'MINIBOT_KEY_PASSWORD']
+            def missing = required.findAll { System.getenv(it) == null || System.getenv(it).isEmpty() }
+            if (missing.isEmpty()) {
+                storeFile file(System.getenv('MINIBOT_KEYSTORE'))
+                storePassword System.getenv('MINIBOT_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('MINIBOT_KEY_ALIAS')
+                keyPassword System.getenv('MINIBOT_KEY_PASSWORD')
+            }
+        }
+    }
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.release
         }
+    }
+    sourceSets {
+        // 测试夹具与电脑端共用同一份
+        test.resources.srcDirs += ['../../../../packages/core/test/fixtures']
+    }
+    testOptions {
+        unitTests.all { maxHeapSize = '1g' }
     }
 }
 
@@ -36,7 +65,13 @@ dependencies {
     implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:$kotlinCoroutinesVersion"
+    implementation "com.squareup.okhttp3:okhttp:$okhttpVersion"
+    implementation "org.bouncycastle:bcprov-jdk18on:$bouncyCastleVersion"
+    implementation "com.journeyapps:zxing-android-embedded:$zxingEmbeddedVersion"
     testImplementation "junit:junit:$junitVersion"
+    testImplementation "org.json:json:$orgJsonVersion"
+    testImplementation "org.jetbrains.kotlinx:kotlinx-coroutines-test:$kotlinCoroutinesVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')
@@ -44,11 +79,14 @@ dependencies {
 
 apply from: 'capacitor.build.gradle'
 
-try {
-    def servicesJSON = file('google-services.json')
-    if (servicesJSON.text) {
-        apply plugin: 'com.google.gms.google-services'
+// 缺少签名环境变量时，release 打包直接失败并指出缺哪个
+gradle.taskGraph.whenReady { graph ->
+    def releasing = graph.allTasks.any { it.project == project && it.name ==~ /(?i)(assemble|bundle|package)Release.*/ }
+    if (releasing) {
+        def required = ['MINIBOT_KEYSTORE', 'MINIBOT_KEYSTORE_PASSWORD', 'MINIBOT_KEY_ALIAS', 'MINIBOT_KEY_PASSWORD']
+        def missing = required.findAll { System.getenv(it) == null || System.getenv(it).isEmpty() }
+        if (!missing.isEmpty()) {
+            throw new GradleException("缺少签名环境变量：" + missing.join('、') + "（见 apps/mobile/README.md）")
+        }
     }
-} catch(Exception e) {
-    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
 }
