@@ -7,7 +7,8 @@
     "packages/core",
     "packages/relay",
     "apps/desktop",
-    "apps/renderer"
+    "apps/renderer",
+    "apps/mobile"
   ],
   "scripts": {
     "build": "npm run build --workspace @minibot/core && npm run build --workspace @minibot/relay && npm run build --workspace @minibot/desktop && npm run build --workspace @minibot/renderer",
