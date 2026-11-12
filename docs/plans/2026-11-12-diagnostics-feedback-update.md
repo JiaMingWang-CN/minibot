@@ -164,10 +164,10 @@
 - `config migrate`：无 `diagnostics` 的旧 config.json 加载后 consent 为 `unset` 且 `installId` 为 UUID，保存后再读不变。
 - `remote denied`：经 gateway 的远程请求访问 `/api/feedback` → 被拒。
 
-- [ ] **Step 1:** Write the tests in **验收**; run `node --test packages/core/test/diag-uploader.test.ts packages/core/test/diag-api.test.ts` — expect FAIL.
-- [ ] **Step 2:** Implement per **思路** and **约束**.
-- [ ] **Step 3:** Run `npm test` — expect PASS.
-- [ ] **Step 4:** Commit.
+- [x] **Step 1:** Write the tests in **验收**; run `node --test packages/core/test/diag-uploader.test.ts packages/core/test/diag-api.test.ts` — expect FAIL.
+- [x] **Step 2:** Implement per **思路** and **约束**.
+- [x] **Step 3:** Run `npm test` — expect PASS.
+- [x] **Step 4:** Commit.
 
 ### Task 4: 远程协议版本协商（电脑端）
 
@@ -194,10 +194,10 @@
 - `phone outdated`：把 `MIN_PHONE_PROTOCOL` 注入为 2，替身报 protocol 1 → 请求被拒 `incompatible`，状态 `phone_outdated`，产生 `remote.version_mismatch` 事件。
 - `pc outdated`：替身报 `minPeer: 2` → 状态 `pc_outdated`。
 
-- [ ] **Step 1:** Write the tests in **验收**; run `node --test packages/core/test/remote-version.test.ts` — expect FAIL.
-- [ ] **Step 2:** Implement per **思路** and **约束**.
-- [ ] **Step 3:** Run `npm test` and `npm run build --workspace @minibot/renderer` — expect PASS.
-- [ ] **Step 4:** Commit.
+- [x] **Step 1:** Write the tests in **验收**; run `node --test packages/core/test/remote-version.test.ts` — expect FAIL.
+- [x] **Step 2:** Implement per **思路** and **约束**.
+- [x] **Step 3:** Run `npm test` and `npm run build --workspace @minibot/renderer` — expect PASS.
+- [x] **Step 4:** Commit.
 
 ### Task 5: 桌面端界面：同意、反馈、渲染端错误上报
 
@@ -226,10 +226,10 @@
 - 不设 `MINIBOT_COLLECT_URL` 启动 → 关于页无开关与反馈按钮，初始化无勾选。
 - 把临时 config.json 的 consent 改为 `unset` 重启 → 主界面出现一次提示条。
 
-- [ ] **Step 1:** Implement per **思路** and **约束**.
-- [ ] **Step 2:** Run `npm run build` — expect PASS.
-- [ ] **Step 3:** 按 **验收（手动）** 启动桌面端检查并截图。
-- [ ] **Step 4:** Commit.
+- [x] **Step 1:** Implement per **思路** and **约束**.
+- [x] **Step 2:** Run `npm run build` — expect PASS.
+- [x] **Step 3:** 按 **验收（手动）** 启动桌面端检查并截图。
+- [x] **Step 4:** Commit.
 
 ### Task 6: 桌面主进程：崩溃捕获、收集地址注入与 electron-updater
 
@@ -263,10 +263,10 @@
 - 在渲染进程控制台 `throw new Error('x')` → 当天日志出现 `crash` 行，堆栈无绝对用户路径。
 - 端到端自动更新放在仓库公开后、Task 9 发版时验证（见 Task 9 验收）。
 
-- [ ] **Step 1:** Implement per **思路** and **约束**.
-- [ ] **Step 2:** Run `npm run build` — expect PASS；`npm test` — expect PASS.
-- [ ] **Step 3:** 按 **验收（手动）** 检查。
-- [ ] **Step 4:** Commit.
+- [x] **Step 1:** Implement per **思路** and **约束**.
+- [x] **Step 2:** Run `npm run build` — expect PASS；`npm test` — expect PASS.
+- [x] **Step 3:** 按 **验收（手动）** 检查。
+- [x] **Step 4:** Commit.
 
 ### Task 7: 安卓原生层：日志、事件上传、反馈、崩溃
 
@@ -300,10 +300,10 @@
 - `UploaderTest.offClears`：切 `off` → 队列文件为空。
 - `UploaderTest.feedback`：`attachLogs` true → body 含 `logs` 且 ≤ 1 MB。
 
-- [ ] **Step 1:** Write the tests in **验收**; run `npm run test:android --workspace @minibot/mobile` — expect FAIL.
-- [ ] **Step 2:** Implement per **思路** and **约束**.
-- [ ] **Step 3:** Run `npm run test:android --workspace @minibot/mobile` — expect PASS.
-- [ ] **Step 4:** Commit.
+- [x] **Step 1:** Write the tests in **验收**; run `npm run test:android --workspace @minibot/mobile` — expect FAIL.
+- [x] **Step 2:** Implement per **思路** and **约束**.
+- [x] **Step 3:** Run `npm run test:android --workspace @minibot/mobile` — expect PASS.
+- [x] **Step 4:** Commit.
 
 ### Task 8: 安卓：版本协商、应用内更新与网页层界面
 
@@ -337,10 +337,10 @@
 - `ConnectorTest.pcOutdated`：电脑 `version` 带 `minPeer: 2` → 状态 `compat: 'pc_outdated'`。
 - 手动：`npm run build --workspace @minibot/mobile` 通过；装到手机/模拟器，设置页显示版本、开关、反馈，提交反馈后 `query feedback` 可见。
 
-- [ ] **Step 1:** Write the tests in **验收**; run `npm run test:android --workspace @minibot/mobile` — expect FAIL.
-- [ ] **Step 2:** Implement per **思路** and **约束**.
-- [ ] **Step 3:** Run `npm run test:android --workspace @minibot/mobile` 与 `npm run build --workspace @minibot/mobile` — expect PASS；做手动检查。
-- [ ] **Step 4:** Commit.
+- [x] **Step 1:** Write the tests in **验收**; run `npm run test:android --workspace @minibot/mobile` — expect FAIL.
+- [x] **Step 2:** Implement per **思路** and **约束**.
+- [x] **Step 3:** Run `npm run test:android --workspace @minibot/mobile` 与 `npm run build --workspace @minibot/mobile` — expect PASS；做手动检查。
+- [x] **Step 4:** Commit.
 
 ### Task 9: 统一版本号与发布流水线
 
@@ -369,7 +369,7 @@
 - 推一个测试标签 `v0.1.0-rc.1` → Actions 两作业成功，草稿/预发布 Release 含上述 5 个文件；下载的 APK 用 `apksigner verify --print-certs` 指纹为 `EA:3C:CB:…:A3:5E`。
 - 仓库公开后：装 0.1.x 正式版桌面端 → 发 0.1.(x+1) → 1 分钟后出现“已就绪”提示，重启后版本更新；装旧 APK → 应用内更新到新版且数据保留。
 
-- [ ] **Step 1:** Implement per **思路** and **约束**.
-- [ ] **Step 2:** 本地验证 sync-version 与 Gradle 版本号。
-- [ ] **Step 3:** 推测试标签验证流水线；仓库公开后做端到端更新验证。
-- [ ] **Step 4:** Commit.
+- [x] **Step 1:** Implement per **思路** and **约束**.
+- [x] **Step 2:** 本地验证 sync-version 与 Gradle 版本号。
+- [x] **Step 3:** 推测试标签验证流水线；仓库公开后做端到端更新验证。
+- [x] **Step 4:** Commit.
