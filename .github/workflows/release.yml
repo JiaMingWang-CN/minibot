@@ -1,5 +1,5 @@
 # 发布流水线：推送 v* 标签触发，构建 Windows 安装包与安卓 APK，发到同一个 GitHub Release。
-#electron-builder 产出的 Release 默认是草稿；两个构建作业都成功后，最后一个作业把它发布。
+# 流程：校验标签与根版本 → 先建草稿 Release → 两端各自构建并上传到草稿 → 都成功后发布草稿。
 # 带 -rc.N 后缀的标签发布为 prerelease（releases/latest 与 electron-updater 默认都忽略 prerelease）。
 
 name: Release
@@ -9,11 +9,13 @@ on:
     tags: ['v*']
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   verify:
     runs-on: ubuntu-latest
+    env:
+      MINIBOT_COLLECT_URL: ${{ vars.MINIBOT_COLLECT_URL }}
     steps:
       - uses: actions/checkout@v4
       # 标签去掉可选的 -rc.N 后缀后必须等于根 package.json 的 version，不符直接失败
@@ -26,10 +28,41 @@ jobs:
             echo "标签 $GITHUB_REF_NAME 与根版本 $VERSION 不一致"
             exit 1
           fi
+      # 收集点地址为空时上传与反馈会被悄悄关闭；正式发版必须配置
+      - name: 校验收集点地址已配置
+        run: |
+          if [ -z "$MINIBOT_COLLECT_URL" ]; then
+            echo "仓库 Variable MINIBOT_COLLECT_URL 未配置：诊断上传与反馈会在客户端整体关闭。"
+            exit 1
+          fi
+
+  # 先单独建好草稿 Release：两端都往同一个草稿上传，避免 electron-builder 按版本号另建一个
+  prepare:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: 建草稿 Release（正文取标签注释）
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 标签注释：带 fetch-depth: 0 才能拿到附注标签对象本身
+          NOTES=$(git for-each-ref --format='%(contents)' "refs/tags/$GITHUB_REF_NAME")
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release edit "$GITHUB_REF_NAME" --draft --title "minibot $GITHUB_REF_NAME" --notes "$NOTES"
+          else
+            gh release create "$GITHUB_REF_NAME" --draft --title "minibot $GITHUB_REF_NAME" --notes "$NOTES"
+          fi
 
   desktop:
-    needs: verify
+    needs: prepare
     runs-on: windows-latest
+    permissions:
+      contents: write
     env:
       MINIBOT_COLLECT_URL: ${{ vars.MINIBOT_COLLECT_URL }}
     steps:
@@ -40,15 +73,27 @@ jobs:
           cache: npm
       - run: npm ci
       - run: node scripts/sync-version.mjs
+      # npm run build 会把 MINIBOT_COLLECT_URL 写进 dist/build-info.json
       - run: npm run build
-      - name: 打包并上传到草稿 Release
-        run: npm run pack --workspace @minibot/desktop -- --publish always
+      - name: 打包 NSIS 安装包（不自动发布）
+        run: npm run pack --workspace @minibot/desktop
+      - name: 上传安装包到草稿 Release
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          gh release upload "$GITHUB_REF_NAME" \
+            "apps/desktop/release/minibot-setup-$VERSION.exe" \
+            "apps/desktop/release/minibot-setup-$VERSION.exe.blockmap" \
+            "apps/desktop/release/latest.yml" \
+            --clobber
 
   android:
-    needs: verify
+    needs: prepare
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     env:
       MINIBOT_COLLECT_URL: ${{ vars.MINIBOT_COLLECT_URL }}
     steps:
@@ -67,6 +112,8 @@ jobs:
         run: echo "${{ secrets.MINIBOT_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/minibot.jks"
       - run: npm ci
       - run: node scripts/sync-version.mjs
+      # 手机网页层依赖 @minibot/core 的构建产物（dist 不在仓库里）
+      - run: npm run build --workspace @minibot/core
       - run: npm run apk --workspace @minibot/mobile
         env:
           MINIBOT_KEYSTORE: ${{ runner.temp }}/minibot.jks
@@ -83,21 +130,22 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION=$(node -p "require('./package.json').version")
-          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" ||
-            gh release create "$GITHUB_REF_NAME" --draft --title "minibot $GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY"
-          gh release upload "$GITHUB_REF_NAME" "minibot-$VERSION.apk" "minibot-$VERSION.apk.sha256" --repo "$GITHUB_REPOSITORY"
+          gh release upload "$GITHUB_REF_NAME" "minibot-$VERSION.apk" "minibot-$VERSION.apk.sha256" --clobber
 
   publish:
     needs: [desktop, android]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
-      - name: 发布草稿 Release（正文取标签注释）
+      - name: 发布草稿 Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          BODY=$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME")
-          EXTRA=""
-          case "$GITHUB_REF_NAME" in *-rc.*) EXTRA="--prerelease";; esac
-          gh release edit "$GITHUB_REF_NAME" --draft=false --latest \
-            --title "minibot $GITHUB_REF_NAME" --notes "$BODY" $EXTRA --repo "$GITHUB_REPOSITORY"
+          # -rc 发 prerelease；正式版标记 latest。二者互斥，不能同时带。
+          if [[ "$GITHUB_REF_NAME" == *-rc.* ]]; then
+            gh release edit "$GITHUB_REF_NAME" --draft=false --prerelease
+          else
+            gh release edit "$GITHUB_REF_NAME" --draft=false --latest
+          fi

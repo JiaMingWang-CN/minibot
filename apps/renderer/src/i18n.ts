@@ -189,7 +189,7 @@ const zhCN = {
   'update.waitReply': '等当前回复结束后再重启',
   'update.dismiss': '稍后',
   'diagnostics.details': '发送哪些内容',
-  'diagnostics.allowed': '会发送：错误类型与错误码、崩溃信息与脱敏后的堆栈、模型请求耗时与 token 数、模型 id 与服务预设、版本号与系统版本。',
+  'diagnostics.allowed': '会发送：错误类型与错误码、崩溃信息与脱敏后的堆栈、模型请求耗时、次数与失败数、模型 id 与服务预设、版本号与系统版本。',
   'diagnostics.forbidden': '不会发送：对话内容、bot 人设、记忆内容、文件内容、图片、API Key、中继口令与配对密钥。',
   'diagnostics.prompt.title': '要发送诊断信息吗？',
   'diagnostics.prompt.body': '帮助改进 minibot：只发送错误类型、崩溃信息、耗时和版本号，不包含对话内容、文件内容和 API Key。',

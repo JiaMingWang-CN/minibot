@@ -1,4 +1,4 @@
-import { promises as fs } from 'node:fs';
+import { appendFileSync, mkdirSync, promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { SecretSet } from '../secrets/redact.ts';
 import { redactLike, scrubPaths, scrubStack, type PathContext } from './scrub.ts';
@@ -226,11 +226,12 @@ export class DiagLog {
     this.write('warn', 'diag', '事件字段被丢弃', { event: event.slice(0, 64), field: field?.slice(0, 64) ?? null, reason });
   }
 
-  private emitEvent(event: DiagEvent): void {
+  /** 白名单校验：不合规字段丢弃并记 warn；整个事件不合规时返回 null。上传队列也用同一规则。 */
+  validateEvent(event: DiagEvent): DiagEvent | null {
     try {
       if (!KINDS.has(event.kind) || typeof event.name !== 'string' || !EVENT_NAME.test(event.name)) {
         this.dropped(String(event.name), null, 'name');
-        return;
+        return null;
       }
       const data: DiagEvent['data'] = {};
       const rest: Record<string, unknown> = {};
@@ -270,9 +271,20 @@ export class DiagLog {
       }
       if (JSON.stringify(rest).length > DATA_MAX) {
         this.dropped(event.name, null, 'size');
-        return;
+        return null;
       }
-      const out: TimedDiagEvent = { ts: this.now(), kind: event.kind, name: event.name, data };
+      return { kind: event.kind, name: event.name, data };
+    } catch (err) {
+      this.warn(err);
+      return null;
+    }
+  }
+
+  private emitEvent(event: DiagEvent): void {
+    try {
+      const clean = this.validateEvent(event);
+      if (clean === null) return;
+      const out: TimedDiagEvent = { ...clean, ts: this.now() };
       if (this.backlog !== null && this.backlog.length < BACKLOG_MAX) this.backlog.push(out);
       for (const listener of [...this.listeners]) {
         try {
@@ -282,6 +294,30 @@ export class DiagLog {
         }
       }
     } catch (err) {
+      this.warn(err);
+    }
+  }
+
+  /** 同步把内存缓冲写盘：崩溃处理器必须在进程退出前调用 */
+  flushSync(): void {
+    const batch = this.pending;
+    this.pending = [];
+    if (batch.length === 0) return;
+    try {
+      mkdirSync(this.dir, { recursive: true });
+      let index = 0;
+      while (index < batch.length) {
+        const day = batch[index]!.day;
+        let text = '';
+        while (index < batch.length && batch[index]!.day === day) {
+          text += batch[index]!.line;
+          index += 1;
+        }
+        appendFileSync(path.join(this.dir, `minibot-${day}.log`), text, 'utf8');
+        this.currentDay = day;
+      }
+    } catch (err) {
+      // 目录不可写、磁盘满：丢弃这批，进程即将退出
       this.warn(err);
     }
   }

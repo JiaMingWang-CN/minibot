@@ -61,6 +61,8 @@ class Uploader(
     private var nextAttemptAt = 0L
     private var failures = 0
     private var started = false
+    /** 预览过的日志：实际上传用同一份 */
+    private var previewedLogs: String? = null
     private var unsubscribe: (() -> Unit)? = null
     private var job: Job? = null
 
@@ -88,14 +90,16 @@ class Uploader(
 
     /** 入队一条事件；off 状态直接丢弃。同步写队列文件（崩溃处理器依赖这一点） */
     fun enqueue(event: DiagEvent) {
-        if (consent() == "off") return
+        if (!available || consent() == "off") return
         try {
+            // 直接入队的事件（聚合指标、崩溃处理器）也要过白名单，避免一个怪字符连累整批
+            val clean = diag.validate(event) ?: return
             val data = JSONObject()
-            for ((key, value) in event.data) data.put(key, value ?: JSONObject.NULL)
+            for ((key, value) in clean.data) data.put(key, value ?: JSONObject.NULL)
             val row = JSONObject()
-                .put("ts", event.ts)
-                .put("kind", event.kind)
-                .put("name", event.name)
+                .put("ts", clean.ts)
+                .put("kind", clean.kind)
+                .put("name", clean.name)
                 .put("data", data)
             synchronized(lock) {
                 load()
@@ -173,8 +177,15 @@ class Uploader(
         }
     }
 
-    /** 最近日志（已脱敏），供反馈附件与预览使用 */
+    /** 最近日志（已脱敏），供反馈附件使用 */
     fun recentLogs(): String = diag.recent(now() - logsWindowMs, logsMaxBytes)
+
+    /** 预览：记住这份内容，提交时若附带日志就用它，保证预览与上传一致 */
+    fun previewLogs(): String {
+        val text = recentLogs()
+        previewedLogs = text
+        return text
+    }
 
     suspend fun sendFeedback(description: String, contact: String?, attachLogs: Boolean) {
         val endpoint = endpoint ?: throw FeedbackException("unavailable", "未配置收集点")
@@ -188,11 +199,14 @@ class Uploader(
             .put("os", os)
             .put("description", description)
         if (!contact.isNullOrBlank()) payload.put("contact", contact)
-        if (attachLogs) payload.put("logs", recentLogs())
+        if (attachLogs) payload.put("logs", previewedLogs ?: recentLogs())
         val status = runCatching { post("$endpoint/v1/feedback", payload) }.getOrNull()
             ?: throw FeedbackException("network", "网络连接失败")
         when (status) {
-            in 200..299 -> Unit
+            in 200..299 -> {
+                // 成功才丢掉预览缓存；失败重试时仍是用户看过的那一份
+                previewedLogs = null
+            }
             429 -> throw FeedbackException("rate_limited", "提交太频繁")
             400, 413 -> throw FeedbackException("rejected", "反馈内容被拒绝")
             else -> throw FeedbackException("unavailable", "反馈服务暂不可用")

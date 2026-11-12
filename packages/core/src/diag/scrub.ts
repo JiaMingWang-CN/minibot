@@ -98,10 +98,15 @@ export function scrubStack(stack: string, ctx: PathContext): string {
 
 const BEARER = /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi;
 const SK_KEY = /\bsk-[A-Za-z0-9_-]{8,}/g;
-// 32 位以上、同时含字母和数字的连续字符：像随机生成的令牌
+// 32 位以上、同时含字母和数字的连续字符：像随机生成的令牌。
+// UUID / bot id（8-4-4-4-12 的十六进制）不是密钥，保留原样以便排查。
+const UUID_SHAPE = /[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}/;
 const LONG_TOKEN = /(?<![A-Za-z0-9_+-])(?=[A-Za-z0-9_+-]*\d)(?=[A-Za-z0-9_+-]*[A-Za-z])[A-Za-z0-9_+-]{32,}/g;
 
 /** 没登记过的密钥的形态过滤：sk-…、Bearer …、长随机串 → [REDACTED] */
 export function redactLike(text: string): string {
-  return text.replace(BEARER, REDACTED_SHAPE).replace(SK_KEY, REDACTED_SHAPE).replace(LONG_TOKEN, REDACTED_SHAPE);
+  return text
+    .replace(BEARER, REDACTED_SHAPE)
+    .replace(SK_KEY, REDACTED_SHAPE)
+    .replace(LONG_TOKEN, (token) => (UUID_SHAPE.test(token) ? token : REDACTED_SHAPE));
 }

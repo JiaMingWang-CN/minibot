@@ -5,7 +5,18 @@ import { t } from '@renderer/i18n';
 import { FIELD, PILL_PRIMARY, PILL_SECONDARY, TEXT_BUTTON } from '@renderer/ui/recipes';
 import { MinibotRemote } from '../native';
 
-export function PairScreen({ deviceModel, revoked, onPaired }: { deviceModel: string; revoked: boolean; onPaired: () => void }) {
+export function PairScreen({
+  deviceModel,
+  revoked,
+  onPaired,
+  onFeedback,
+}: {
+  deviceModel: string;
+  revoked: boolean;
+  onPaired: () => void;
+  /** 配置了收集点时显示反馈入口 */
+  onFeedback?: () => void;
+}) {
   const [deviceName, setDeviceName] = useState(deviceModel);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -73,6 +84,11 @@ export function PairScreen({ deviceModel, revoked, onPaired }: { deviceModel: st
       ) : (
         <button type="button" className={TEXT_BUTTON} onClick={() => setPasting(true)}>
           {t('mobile.pair.paste')}
+        </button>
+      )}
+      {onFeedback !== undefined && (
+        <button type="button" className={TEXT_BUTTON} onClick={onFeedback}>
+          {t('about.feedback')}
         </button>
       )}
     </div>

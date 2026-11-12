@@ -82,6 +82,8 @@ function reportCrash(level: 'warn' | 'error', name: string, err: unknown, fields
         data: { source: 'main', ...(stack !== undefined ? { stack } : {}) },
       },
     );
+    // 日志默认在 setImmediate 里批量写盘；崩溃后进程马上退出，这里同步落盘
+    kernel.diag.flushSync();
   } catch {
     // 日志失败不能影响崩溃处理
   }

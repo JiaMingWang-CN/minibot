@@ -66,6 +66,10 @@ private sealed interface Outcome {
 private class Link(val carrier: Carrier, val via: Via) {
     val events = Channel<Ev>(Channel.UNLIMITED)
     @Volatile var channel: SecureChannel? = null
+    /** 这条线路是否已被认领（局域网同时连上多条时只有胜出的算） */
+    @Volatile var accepted = false
+    /** 认领之前就到达的 version，等胜出后再应用 */
+    @Volatile var pendingVersion: JSONObject? = null
     /** 配对：第二条握手消息已验过，认领这条线路后调用它发出第三条消息 */
     @Volatile var completePairing: (() -> Unit)? = null
 
@@ -97,6 +101,9 @@ class Connector(
     @Volatile var compat: String = "unknown"
         private set
 
+    /** 兼容状态变化时通知外层（界面要显示版本不兼容提示） */
+    @Volatile var onCompatChanged: () -> Unit = {}
+
     @Volatile private var activeChannel: SecureChannel? = null
     private val links = CopyOnWriteArrayList<Link>()
     private val kick = Channel<Unit>(Channel.CONFLATED)
@@ -104,14 +111,16 @@ class Connector(
 
     fun start() {
         if (job?.isActive == true) return
-        // 读不出（存储暂不可用）也启动：循环里会退避重试
-        val paired = try {
-            store.load() != null
-        } catch (e: StoreUnavailableException) {
-            true
+        // 读存储要解密：放到协程（IO 线程）里做，别阻塞调用方（通常是主线程）
+        job = scope.launch {
+            val paired = try {
+                store.load() != null
+            } catch (e: StoreUnavailableException) {
+                // 读不出也启动：循环里会退避重试
+                true
+            }
+            if (paired) loop()
         }
-        if (!paired) return
-        job = scope.launch { loop() }
     }
 
     suspend fun stop() {
@@ -316,6 +325,12 @@ class Connector(
                         }
                         claimed = true
                     }
+                    // 只有胜出的线路能改兼容状态：落选线路的握手完成不能把它重置掉
+                    compat = "unknown"
+                    link.accepted = true
+                    link.pendingVersion?.let { handlePeerVersion(it) }
+                    link.pendingVersion = null
+                    runCatching { onCompatChanged() }
                     if (pair) {
                         phase = Phase.PAIRED
                         try {
@@ -356,7 +371,7 @@ class Connector(
         channel.onMessage = { message ->
             when (message.optString("t")) {
                 "paired" -> link.events.trySend(Ev.Paired)
-                "version" -> handlePeerVersion(message)
+                "version" -> if (link.accepted) handlePeerVersion(message) else link.pendingVersion = message
                 else -> {
                     // 配对中的地址刚从配对码里拿到，不需要再更新
                     if (!pairing && message.optString("t") == "ready") {
@@ -374,7 +389,6 @@ class Connector(
                 }
             }
         }
-        compat = "unknown"
         link.events.trySend(Ev.Ready)
     }
 
@@ -421,6 +435,7 @@ class Connector(
                 ),
             )
         }
+        runCatching { onCompatChanged() }
     }
 
     private fun failHandshake(link: Link, message: String) {

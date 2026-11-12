@@ -16,6 +16,7 @@ import { SettingsSheet, viaText } from './screens/SettingsSheet';
 import { ThreadListScreen } from './screens/ThreadListScreen';
 import { nativeEvents, nativeTransport } from './transport';
 import { UpdatePrompt } from './UpdatePrompt';
+import { FeedbackSheet } from './screens/FeedbackSheet';
 import { usePhoneStatus } from './usePhoneStatus';
 
 type Subscribe = (listener: (event: KernelEvent) => void) => () => void;
@@ -205,6 +206,9 @@ export function MobileApp() {
   const [update, setUpdate] = useState<{ version: string; notes: string } | null>(null);
   const [updateNotice, setUpdateNotice] = useState<string | null>(null);
   const [diagPrompt, setDiagPrompt] = useState(false);
+  const [diagAvailable, setDiagAvailable] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [feedbackSent, setFeedbackSent] = useState(false);
   const lastErrorAt = useRef(new Map<string, number>());
   const [view, setViewState] = useState<'list' | 'chat'>('list');
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -235,8 +239,14 @@ export function MobileApp() {
   // 首次打开且还没表态：显示与电脑端同样的说明
   useEffect(() => {
     void MinibotRemote.getDiagnostics().then(
-      (info) => setDiagPrompt(info.available && info.consent === 'unset'),
-      () => setDiagPrompt(false),
+      (info) => {
+        setDiagAvailable(info.available);
+        setDiagPrompt(info.available && info.consent === 'unset');
+      },
+      () => {
+        setDiagAvailable(false);
+        setDiagPrompt(false);
+      },
     );
   }, []);
 
@@ -352,6 +362,29 @@ export function MobileApp() {
       {update !== null && (
         <UpdatePrompt version={update.version} notes={update.notes} onClose={() => setUpdate(null)} />
       )}
+      {diagAvailable && (
+        <FeedbackSheet
+          open={feedbackOpen}
+          onClose={() => setFeedbackOpen(false)}
+          onSent={() => {
+            setFeedbackOpen(false);
+            setFeedbackSent(true);
+          }}
+        />
+      )}
+      {feedbackSent && (
+        <Dialog
+          open
+          onClose={() => setFeedbackSent(false)}
+          title={t('feedback.title')}
+          footer={
+            <button type="button" className={PILL_SECONDARY} onClick={() => setFeedbackSent(false)}>
+              {t('mobile.settings.close')}
+            </button>
+          }>
+          <p className="text-[14px] text-ink-secondary">{t('feedback.ok')}</p>
+        </Dialog>
+      )}
     </>
   );
 
@@ -366,6 +399,7 @@ export function MobileApp() {
             setGuide(true);
             setSettingsOpen(true);
           }}
+          onFeedback={diagAvailable ? () => setFeedbackOpen(true) : undefined}
         />
         {overlays}
       </>

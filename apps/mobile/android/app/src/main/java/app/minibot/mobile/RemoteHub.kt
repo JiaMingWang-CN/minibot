@@ -90,11 +90,13 @@ object RemoteHub {
         Diag.init(appContext)
         prefs = appContext.getSharedPreferences("remote", Context.MODE_PRIVATE)
         store = KeystorePairingStore(appContext)
-        // 中继口令登记为密钥：日志里万一出现也会被替换
-        try {
-            store.load()?.relayToken?.let { Diag.registerSecret(it) }
-        } catch (e: Exception) {
-            // 存储暂时读不出时下次连接再登记
+        // 中继口令登记为密钥：日志里万一出现也会被替换。读存储要解密，放到 IO 线程
+        scope.launch(Dispatchers.IO) {
+            try {
+                store.load()?.relayToken?.let { Diag.registerSecret(it) }
+            } catch (e: Exception) {
+                // 存储暂时读不出时下次连接再登记
+            }
         }
         poster = AndroidPoster(appContext)
         updater = Updater(
@@ -106,6 +108,7 @@ object RemoteHub {
             installer = { file -> installUpdate(file) },
         )
         connector = Connector(scope, store, OkHttpCarrierFactory())
+        connector.onCompatChanged = { sink?.status() }
         connector.onMessage = { message ->
             // 应答直接交给等待者：处理事件时可能要发请求并等应答，放进同一队列会互相等死
             if (message.optString("t") == "res") pending[message.optString("id")]?.complete(message)

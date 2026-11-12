@@ -111,6 +111,8 @@ export class DiagnosticUploader {
   private nextAttemptAt = 0;
   private lastUploadAt = Number.NEGATIVE_INFINITY;
   private stopped = false;
+  /** 预览过的日志：实际上传用同一份，满足“预览与上传内容一致” */
+  private previewedLogs: string | null = null;
 
   constructor(o: DiagnosticUploaderOptions) {
     this.db = o.db;
@@ -161,12 +163,15 @@ export class DiagnosticUploader {
     this.timer = null;
   }
 
-  /** 入队一条事件；off 状态直接丢弃 */
+  /** 入队一条事件；off 状态或未配置收集点时直接丢弃 */
   push(event: DiagEvent & { ts?: number }): void {
-    if (this.stopped || this.consent() === 'off') return;
+    if (this.stopped || !this.available || this.consent() === 'off') return;
     try {
+      // 走与日志同一条白名单：聚合指标等直接入队的事件也要过滤，避免一个怪字符连累整批
+      const clean = this.diag.validateEvent(event);
+      if (clean === null) return;
       try {
-        this.insert.run(Math.round(event.ts ?? this.now()), event.kind, event.name, JSON.stringify(event.data));
+        this.insert.run(Math.round(event.ts ?? this.now()), clean.kind, clean.name, JSON.stringify(clean.data));
       } catch {
         this.diag.write('warn', 'diag', 'queue.write_failed');
         return;
@@ -223,9 +228,16 @@ export class DiagnosticUploader {
     await run;
   }
 
-  /** 取最近日志（已脱敏），供反馈附件与预览使用 */
+  /** 取最近日志（已脱敏），供反馈附件使用 */
   async recentLogs(): Promise<string> {
     return this.diag.recent(this.now() - this.logsWindowMs, this.logsMaxBytes);
+  }
+
+  /** 预览：记住这份内容，提交时若附带日志就用它，保证预览与上传一致 */
+  async previewLogs(): Promise<string> {
+    const text = await this.recentLogs();
+    this.previewedLogs = text;
+    return text;
   }
 
   async sendFeedback(input: FeedbackInput): Promise<void> {
@@ -239,10 +251,16 @@ export class DiagnosticUploader {
       description: input.description,
     };
     if (input.contact !== undefined && input.contact.trim().length > 0) body.contact = input.contact;
-    if (input.attachLogs) body.logs = await this.recentLogs();
+    if (input.attachLogs) {
+      body.logs = this.previewedLogs ?? (await this.recentLogs());
+    }
     const response = await this.post(`${endpoint}/v1/feedback`, body).catch(() => null);
     if (response === null) throw new FeedbackError('network', '网络连接失败');
-    if (response.ok) return;
+    if (response.ok) {
+      // 成功才丢掉预览缓存；失败重试时仍是用户看过的那一份
+      this.previewedLogs = null;
+      return;
+    }
     if (response.status === 429) throw new FeedbackError('rate_limited', '提交太频繁');
     if (response.status === 400 || response.status === 413) throw new FeedbackError('rejected', '反馈内容被拒绝');
     throw new FeedbackError('unavailable', `服务暂不可用（${response.status}）`);

@@ -15,9 +15,12 @@
    git tag -a vX.Y.Z -m "更新说明……"
    git push origin vX.Y.Z
    ```
-3. GitHub Actions（`.github/workflows/release.yml`）自动构建。标签去掉可选 `-rc.N` 后缀后必须等于根版本，否则第一步直接失败。
-4. 两个构建作业（Windows 安装包、安卓 APK）都成功后，最后一个作业把草稿 Release 发布；任一失败则 Release 保持草稿，客户端看不到。
-5. 带 `-rc.N` 的标签发布为 prerelease：`releases/latest` 与 electron-updater 默认都忽略 prerelease，正式用户不会收到。
+3. GitHub Actions（`.github/workflows/release.yml`）自动构建：
+   - 校验标签（去掉可选 `-rc.N` 后缀后必须等于根版本）和 `MINIBOT_COLLECT_URL`（为空直接失败，避免上传与反馈被悄悄关闭）；
+   - 先建一个草稿 Release（正文取附注标签的注释），两端都往这同一个草稿上传，重跑时用 `--clobber` 覆盖；
+   - Windows 作业 `--publish never` 打包后手动上传 exe / blockmap / latest.yml；安卓作业先构建 `@minibot/core` 再打 APK，重命名并生成 sha256 后上传。
+4. 两个构建作业都成功后，最后一个作业把草稿 Release 发布；任一失败则 Release 保持草稿，客户端看不到。
+5. 带 `-rc.N` 的标签发布为 prerelease（不再同时标记 latest）；`releases/latest` 与 electron-updater 默认都忽略 prerelease，正式用户不会收到。
 
 一个 Release 必须同时包含：`minibot-setup-X.Y.Z.exe`、`minibot-setup-X.Y.Z.exe.blockmap`、`latest.yml`、`minibot-X.Y.Z.apk`、`minibot-X.Y.Z.apk.sha256`。
 
@@ -25,13 +28,13 @@
 
 | 名称 | 类型 | 用途 |
 | --- | --- | --- |
-| `MINIBOT_COLLECT_URL` | Variable | 构建时注入两端的诊断收集点地址；为空则上传与反馈整体关闭 |
+| `MINIBOT_COLLECT_URL` | Variable | 构建时注入两端的诊断收集点地址；**发版时必须配置**，为空会让校验作业失败（客户端会把上传与反馈整体关闭） |
 | `MINIBOT_KEYSTORE_BASE64` | Secret | 安卓签名 keystore（base64），只在 CI 里还原到 `$RUNNER_TEMP` |
 | `MINIBOT_KEYSTORE_PASSWORD` | Secret | keystore 口令 |
 | `MINIBOT_KEY_ALIAS` | Secret | 密钥别名 |
 | `MINIBOT_KEY_PASSWORD` | Secret | 密钥口令 |
 
-`GH_TOKEN` 用内置的 `GITHUB_TOKEN`（workflow 已声明 `contents: write`）。
+`GH_TOKEN` 用内置的 `GITHUB_TOKEN`（只有创建 / 上传 Release 的作业声明了 `contents: write`，其余为只读）。
 
 ## 签名约束
 

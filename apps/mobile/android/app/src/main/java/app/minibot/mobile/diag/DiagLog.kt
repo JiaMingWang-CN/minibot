@@ -154,10 +154,11 @@ class DiagLog(
         else -> clean(value.toString())
     }
 
-    private fun emitEvent(event: DiagEvent) {
+    /** 白名单校验：不合规字段丢弃；整个事件不合规时返回 null。上传队列也用同一规则。 */
+    fun validate(event: DiagEvent): DiagEvent? {
         if (event.kind !in KINDS || !EVENT_NAME.matches(event.name)) {
             dropped(event.name, null, "name")
-            return
+            return null
         }
         val data = linkedMapOf<String, Any?>()
         val measured = linkedMapOf<String, Any?>()
@@ -194,9 +195,14 @@ class DiagLog(
         }
         if ((JSONObject.wrap(measured)?.toString()?.length ?: 0) > DATA_MAX) {
             dropped(event.name, null, "size")
-            return
+            return null
         }
-        val timed = DiagEvent(event.kind, event.name, data, now())
+        return DiagEvent(event.kind, event.name, data, event.ts)
+    }
+
+    private fun emitEvent(event: DiagEvent) {
+        val clean = validate(event) ?: return
+        val timed = clean.copy(ts = now())
         for (listener in listeners) runCatching { listener(timed) }
     }
 

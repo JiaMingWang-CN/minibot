@@ -297,7 +297,16 @@ export class RemoteGateway {
   }
 
   private startSession(channel: SecureChannel, deviceId: string, via: 'lan' | 'relay', pairedName: string | null): void {
-    const session: Session = { channel, deviceId, unsubscribe: () => {}, version: this.deviceVersion(deviceId) };
+    // 每次新连接都从 unknown 开始，不能沿用上一次的兼容结果；只保留上次报告过的版本号
+    const known = this.versions.get(deviceId);
+    const session: Session = {
+      channel,
+      deviceId,
+      unsubscribe: () => {},
+      version: { appVersion: known?.appVersion ?? null, compat: 'unknown' },
+    };
+    // 新会话先显示 unknown，等手机的 version 到达再判定
+    this.versions.set(deviceId, session.version);
     let set = this.sessions.get(deviceId);
     if (set === undefined) {
       set = new Set();

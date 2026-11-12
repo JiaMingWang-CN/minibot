@@ -255,3 +255,53 @@ test('feedback network failure', async () => {
     db.close();
   }
 });
+
+test('no collect url queues nothing', async () => {
+  const s = await setup({ consent: 'unset', collectUrl: null });
+  try {
+    for (let i = 0; i < 5; i += 1) s.uploader.push(event(i));
+    assert.equal(s.uploader.size(), 0);
+    await assert.rejects(
+      s.uploader.sendFeedback({ description: 'x', attachLogs: false }),
+      (err: unknown) => (err as { kind?: string }).kind === 'unavailable',
+    );
+  } finally {
+    await s.close();
+  }
+});
+
+test('queued events go through whitelist', async () => {
+  const s = await setup({ consent: 'unset' });
+  try {
+    s.uploader.push({
+      kind: 'metric',
+      name: 'metric/model.latency',
+      data: { model: 'bad\nname', count: 3, p50: 10 } as unknown as Record<string, string | number>,
+    });
+    assert.equal(s.uploader.size(), 1);
+    const row = s.db.prepare('SELECT data_json FROM diag_queue').get() as { data_json: string };
+    const data = JSON.parse(row.data_json) as Record<string, unknown>;
+    assert.equal(data['count'], 3);
+    assert.equal(data['p50'], 10);
+    assert.equal(data['model'], undefined);
+  } finally {
+    await s.close();
+  }
+});
+
+test('feedback uploads the previewed logs', async () => {
+  const s = await setup({ consent: 'unset' });
+  try {
+    s.diag.write('info', 'app', 'before preview');
+    const preview = await s.uploader.previewLogs();
+    assert.ok(preview.includes('before preview'));
+    s.diag.write('info', 'app', 'after preview');
+    await s.diag.recent(0, 1024 * 1024);
+    await s.uploader.sendFeedback({ description: 'x', attachLogs: true });
+    const body = bodyOf(s.posts[0]!);
+    assert.equal(body['logs'], preview);
+    assert.ok(!(body['logs'] as string).includes('after preview'));
+  } finally {
+    await s.close();
+  }
+});

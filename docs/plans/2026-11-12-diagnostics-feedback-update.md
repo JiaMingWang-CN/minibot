@@ -334,7 +334,7 @@
 - `UpdaterTest.hashMismatch`：sha256 文件与内容不符 → 抛错，`cacheDir/update/` 无 apk 残留。
 - `UpdaterTest.dailyLimit`：自动检查当天第二次 → 不发请求；`manual: true` → 发请求。
 - `ConnectorTest.sendsVersion`：握手后收到 `ready` → 手机发出 `t:'version'`、`protocol:1`。
-- `ConnectorTest.pcOutdated`：电脑 `version` 带 `minPeer: 2` → 状态 `compat: 'pc_outdated'`。
+- `ConnectorTest.phoneOutdated`：电脑 `version` 带 `minPeer: 2`（电脑要求更新的手机协议）→ 状态 `compat: 'phone_outdated'`；`ConnectorTest.pcOutdated`：电脑报 `protocol: 0`（低于手机要求的最低电脑协议）→ `compat: 'pc_outdated'`。
 - 手动：`npm run build --workspace @minibot/mobile` 通过；装到手机/模拟器，设置页显示版本、开关、反馈，提交反馈后 `query feedback` 可见。
 
 - [x] **Step 1:** Write the tests in **验收**; run `npm run test:android --workspace @minibot/mobile` — expect FAIL.

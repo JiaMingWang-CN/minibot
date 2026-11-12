@@ -100,3 +100,29 @@ test('pc outdated', async () => {
     await s.teardown();
   }
 });
+
+test('new connection resets compat to unknown', async () => {
+  const s = await setup({ minPhoneProtocol: 2 });
+  try {
+    const phone = await s.pair();
+    sendVersion(phone, { protocol: 1, minPeer: 1 });
+    const id = await s.deviceId();
+    await waitFor(() => s.gateway.deviceVersion(id).compat === 'phone_outdated');
+    phone.close();
+    await waitFor(() => !s.gateway.onlineDeviceIds().includes(id));
+    const { a, b } = carrierPair();
+    s.gateway.accept(a, 'lan');
+    const next = await TestPhone.connect(b, phone.keys, phone.pcPublicKey);
+    try {
+      // 新会话不能沿用上一次的 phone_outdated；版本号保留供界面显示
+      assert.equal(s.gateway.deviceVersion(id).compat, 'unknown');
+      assert.equal(s.gateway.deviceVersion(id).appVersion, '0.1.0');
+      const reply = await next.request('GET', '/api/state');
+      assert.equal(reply.status, 200);
+    } finally {
+      next.close();
+    }
+  } finally {
+    await s.teardown();
+  }
+});

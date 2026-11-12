@@ -100,12 +100,15 @@ export function App() {
         canPersistKeys={boot.state.canPersistKeys}
         presets={boot.presets}
         onDone={(created) => {
-          // 初始化新加了供应商：刷新状态，模型菜单才列得出它
-          void boot.api
-            .state()
-            .then((state) => setBoot((b) => b && { ...b, state }))
-            .catch(() => {});
-          setBot(created);
+          // 初始化新加了供应商：刷新状态后再生效；诊断同意状态也在这份新状态里，
+          // 否则主界面会拿着旧状态再弹一次提示
+          void boot.api.state().then(
+            (state) => {
+              setBoot((b) => (b === null ? b : { ...b, state }));
+              setBot(created);
+            },
+            () => setBot(created),
+          );
         }}
       />
     );

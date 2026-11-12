@@ -57,7 +57,7 @@ object Diag {
         logRef = log
         settingsRef = settings
         uploaderRef = uploader
-        installCrashHandler(log, uploader)
+        installCrashHandler(log)
         uploader.start()
         // 清旧文件与写启动日志都放到 IO 线程，不在主线程碰磁盘
         scope.launch {
@@ -88,6 +88,9 @@ object Diag {
 
     fun recentLogs(): String = uploaderRef?.recentLogs() ?: ""
 
+    /** 预览后提交时用同一份日志 */
+    fun previewLogs(): String = uploaderRef?.previewLogs() ?: ""
+
     fun setConsent(value: String) {
         uploaderRef?.setConsent(value)
     }
@@ -116,12 +119,13 @@ object Diag {
     }
 
     /** 同步写 crash 与事件，然后交回系统原来的处理器（进程照常崩溃） */
-    private fun installCrashHandler(log: DiagLog, uploader: Uploader) {
+    private fun installCrashHandler(log: DiagLog) {
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, error ->
             try {
                 val stack = scrubStack(error.stackTraceToString(), log.context())
                 val event = DiagEvent("crash", "crash/app", mapOf("source" to "android", "stack" to stack))
+                // log.write 会同步通知订阅者入队；不要再 enqueue 一次，否则同一崩溃记两条
                 log.write(
                     LogLevel.ERROR,
                     "app",
@@ -129,7 +133,6 @@ object Diag {
                     mapOf("thread" to thread.name, "message" to (error.message ?: ""), "stack" to stack),
                     event,
                 )
-                uploader.enqueue(event)
             } catch (e: Throwable) {
                 // 崩溃处理本身失败也必须继续走原处理器
             }

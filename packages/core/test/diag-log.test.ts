@@ -482,3 +482,13 @@ test('重新打开内核时，已有 bot 的工作区也会登记', async () => 
   await second.close();
   assert.match(out, /open <workspace>/);
 });
+
+test('flushSync: 崩溃时同步落盘', async () => {
+  const dir = await tmpDir();
+  const log = new DiagLog({ dir, secrets: new SecretSet() });
+  log.write('error', 'app', 'crash line');
+  log.flushSync();
+  const text = await fs.readFile(path.join(dir, fileOf(Date.now())), 'utf8');
+  assert.ok(text.includes('crash line'));
+  await log.close();
+});

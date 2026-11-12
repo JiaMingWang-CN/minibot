@@ -126,12 +126,17 @@ class Updater(
         if (code <= currentVersionCode) return null
         var apk: JSONObject? = null
         var sha: JSONObject? = null
+        // 只认本次发版约定的资产名，避免 Release 里其他 APK 被选中
+        val version = tag.removePrefix("v")
+        val apkName = "minibot-$version.apk"
+        val shaName = "$apkName.sha256"
         val assets = json.optJSONArray("assets") ?: JSONArray()
         for (i in 0 until assets.length()) {
             val asset = assets.optJSONObject(i) ?: continue
-            val name = asset.optString("name")
-            if (name.endsWith(".apk.sha256")) sha = asset
-            else if (name.endsWith(".apk")) apk = asset
+            when (asset.optString("name")) {
+                shaName -> sha = asset
+                apkName -> apk = asset
+            }
         }
         val apkAsset = apk ?: return null
         val shaAsset = sha ?: return null

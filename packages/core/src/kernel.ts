@@ -1243,7 +1243,8 @@ export class Kernel {
   }
 
   async logsPreview(): Promise<{ text: string }> {
-    return { text: await this.uploader.recentLogs() };
+    // 预览后提交时用同一份内容
+    return { text: await this.uploader.previewLogs() };
   }
 
   async sendFeedback(input: FeedbackInput): Promise<{ ok: true }> {

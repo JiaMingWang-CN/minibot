@@ -112,6 +112,19 @@ class UploaderTest {
     }
 
     @Test
+    fun feedbackUploadsPreviewedLogs() = runBlocking {
+        val (uploader, log) = uploader()
+        log.write(LogLevel.INFO, "app", "before preview")
+        val preview = uploader.previewLogs()
+        log.write(LogLevel.INFO, "app", "after preview")
+        server.enqueue(MockResponse().setResponseCode(204))
+        uploader.sendFeedback("x", null, true)
+        val body = JSONObject(gunzip(server.takeRequest().body.readByteArray()))
+        assertEquals(preview, body.getString("logs"))
+        assertTrue(!preview.contains("after preview"))
+    }
+
+    @Test
     fun feedbackWithoutLogs() = runBlocking {
         val (uploader, _) = uploader()
         server.enqueue(MockResponse().setResponseCode(204))
@@ -119,6 +132,17 @@ class UploaderTest {
         val body = JSONObject(gunzip(server.takeRequest().body.readByteArray()))
         assertEquals("a@b.c", body.getString("contact"))
         assertTrue(!body.has("logs"))
+    }
+
+    @Test
+    fun enqueueValidatesFields() {
+        val (uploader, _) = uploader()
+        consent = "unset"
+        uploader.enqueue(DiagEvent("metric", "metric/model.latency", mapOf("model" to "bad\nname", "count" to 3)))
+        val line = File(dir, "diag-queue.jsonl").readLines().filter { it.isNotBlank() }.single()
+        val data = JSONObject(line).getJSONObject("data")
+        assertEquals(3, data.getInt("count"))
+        assertTrue(!data.has("model"))
     }
 
     @Test

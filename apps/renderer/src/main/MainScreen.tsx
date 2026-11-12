@@ -79,6 +79,10 @@ export function MainScreen({
   const [diagPrompt, setDiagPrompt] = useState(diagnosticsPrompt);
   const update = useUpdateState();
   const [updateDismissed, setUpdateDismissed] = useState(false);
+  // 同意状态在别处（初始化、设置页）改过：不要再提示
+  useEffect(() => {
+    if (!diagnosticsPrompt) setDiagPrompt(false);
+  }, [diagnosticsPrompt]);
   const currentProvider = providers.find((p) => p.id === bot.providerId);
   const visionOk = specOf(currentProvider, presets.find((x) => x.id === currentProvider?.presetId), bot.model).vision;
   const composer = useComposerImages({ visionOk, model: bot.model });

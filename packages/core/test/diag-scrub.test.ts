@@ -85,3 +85,24 @@ test('redactLike: 形态过滤', () => {
   assert.equal(redactLike('[REDACTED_API_KEY] ok'), '[REDACTED_API_KEY] ok');
   assert.equal(redactLike('C:\\Users\\x\\file.ts:10:5'), 'C:\\Users\\x\\file.ts:10:5');
 });
+
+test('redactLike: UUID 与 bot id 不当密钥抹掉', () => {
+  const id = '8988e460-20cf-4194-bcd3-c45c2a3fe2c2';
+  assert.equal(redactLike(`bot ${id} failed`), `bot ${id} failed`);
+  const path = '\\Users\\x\\workspaces\\' + id;
+  assert.equal(redactLike(path), path);
+});
+
+test('scrubPaths: 含 UUID 的默认工作区路径替换成 <workspace>', () => {
+  const id = '8988e460-20cf-4194-bcd3-c45c2a3fe2c2';
+  const ws = 'C:\\Users\\Alice\\.minibot\\workspaces\\' + id;
+  assert.equal(
+    scrubPaths(ws + '\\a.ts', {
+      home: 'C:\\Users\\Alice',
+      workspaces: [ws],
+      user: 'Alice',
+      host: 'PC',
+    }),
+    '<workspace>\\a.ts',
+  );
+});

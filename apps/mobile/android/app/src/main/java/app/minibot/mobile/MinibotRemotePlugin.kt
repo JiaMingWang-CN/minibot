@@ -40,7 +40,10 @@ class MinibotRemotePlugin : Plugin(), HubSink {
         RemoteHub.init(context)
         RemoteHub.sink = this
         RemoteHub.startConnection()
-        if (RemoteHub.isPaired() && RemoteHub.background) RemoteService.start(context)
+        // 读配对信息要解密：不能在主线程做
+        RemoteHub.hubScope.launch(Dispatchers.IO) {
+            if (RemoteHub.isPaired() && RemoteHub.background) RemoteService.start(context)
+        }
     }
 
     override fun handleOnDestroy() {
@@ -65,7 +68,9 @@ class MinibotRemotePlugin : Plugin(), HubSink {
 
     @PluginMethod
     fun getStatus(call: PluginCall) {
-        call.resolve(JSObject(RemoteHub.statusJson().toString()))
+        RemoteHub.hubScope.launch(Dispatchers.IO) {
+            call.resolve(JSObject(RemoteHub.statusJson().toString()))
+        }
     }
 
     @PluginMethod
@@ -235,7 +240,7 @@ class MinibotRemotePlugin : Plugin(), HubSink {
     fun logsPreview(call: PluginCall) {
         RemoteHub.hubScope.launch(Dispatchers.IO) {
             try {
-                call.resolve(JSObject().put("text", Diag.recentLogs()))
+                call.resolve(JSObject().put("text", Diag.previewLogs()))
             } catch (e: Exception) {
                 call.reject(e.message ?: "读取日志失败")
             }
