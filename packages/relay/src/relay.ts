@@ -129,7 +129,13 @@ export async function startRelay(o: RelayOptions): Promise<RelayHandle> {
       });
       return;
     }
-    res.writeHead(404).end();
+    // 未启用收集时，除 /collect/* 外的普通 HTTP 保持 ws 原有行为（426）
+    if (collector !== null || path.startsWith('/collect/')) {
+      res.writeHead(404).end();
+      return;
+    }
+    const body = 'Upgrade Required';
+    res.writeHead(426, { 'Content-Length': body.length, 'Content-Type': 'text/plain' }).end(body);
   });
   server.on('upgrade', (req, socket, head) => {
     const path = (req.url ?? '').split('?')[0];
@@ -138,7 +144,9 @@ export async function startRelay(o: RelayOptions): Promise<RelayHandle> {
       return;
     }
     socket.on('error', () => {});
-    socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
+    // 未启用收集时与 ws 原有行为一致（400）；启用后统一 404
+    const [code, text] = collector === null ? [400, 'Bad Request'] : [404, 'Not Found'];
+    socket.end(`HTTP/1.1 ${code} ${text}\r\nConnection: close\r\nContent-Type: text/html\r\nContent-Length: ${text.length}\r\n\r\n${text}`);
   });
   await new Promise<void>((resolve, reject) => {
     server.once('listening', () => resolve());

@@ -6,9 +6,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
+import { createHash, createHmac, createPrivateKey, createPublicKey, diffieHellman, generateKeyPairSync } from 'node:crypto';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { DatabaseSync } from 'node:sqlite';
 import { WebSocket } from 'ws';
 import { startRelay, type RelayHandle } from '../src/relay.ts';
+import { createCollector } from '../src/collect.ts';
 
 const TOKEN = 'relay-test-token-1234';
 const QUERY = fileURLToPath(new URL('../src/query.ts', import.meta.url));
@@ -217,27 +221,230 @@ test('storage full', async () => {
   }
 });
 
+// 以下为配对用的电脑身份与客户端辅助（与 relay.test.ts 中的写法一致）
+function pcKeys(): { publicKey: Buffer; privateKey: Buffer } {
+  const { publicKey, privateKey } = generateKeyPairSync('x25519');
+  return {
+    publicKey: Buffer.from(publicKey.export({ type: 'spki', format: 'der' }).subarray(-32)),
+    privateKey: Buffer.from(privateKey.export({ type: 'pkcs8', format: 'der' }).subarray(-32)),
+  };
+}
+
+interface Peer {
+  ws: WebSocket;
+  texts: Record<string, unknown>[];
+  binaries: Buffer[];
+}
+
+async function waitUntil(predicate: () => boolean, timeoutMs = 3000): Promise<void> {
+  const started = Date.now();
+  while (!predicate()) {
+    if (Date.now() - started > timeoutMs) throw new Error('等待超时');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+function peer(port: number, hello: Record<string, unknown>, keys?: { publicKey: Buffer; privateKey: Buffer }): Promise<Peer> {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/v1`);
+    const p: Peer = { ws, texts: [], binaries: [] };
+    ws.on('message', (data: Buffer, isBinary: boolean) => {
+      if (isBinary) {
+        p.binaries.push(Buffer.from(data));
+        return;
+      }
+      const message = JSON.parse(data.toString('utf8')) as Record<string, unknown>;
+      p.texts.push(message);
+      if (message['type'] === 'challenge' && keys !== undefined) {
+        const shared = diffieHellman({
+          privateKey: createPrivateKey({ key: Buffer.concat([Buffer.from('302e020100300506032b656e04220420', 'hex'), keys.privateKey]), format: 'der', type: 'pkcs8' }),
+          publicKey: createPublicKey({ key: Buffer.concat([Buffer.from('302a300506032b656e032100', 'hex'), Buffer.from(String(message['epk']), 'base64url')]), format: 'der', type: 'spki' }),
+        });
+        const key = createHash('sha256').update('minibot-relay-auth/1').update(shared).digest();
+        const proof = createHmac('sha256', key).update(Buffer.from(String(message['nonce']), 'base64url')).update(Buffer.from(String(hello['routeId']), 'hex')).digest('base64url');
+        ws.send(JSON.stringify({ type: 'proof', proof }));
+      }
+    });
+    ws.once('open', () => {
+      ws.send(JSON.stringify(hello));
+      resolve(p);
+    });
+    ws.once('error', reject);
+  });
+}
+
 test('ws unaffected', async () => {
   const dir = tmp();
   // 数据库路径指向一个目录，打开时必然失败
   const relay = await startRelay({ host: '127.0.0.1', port: 0, token: TOKEN, collect: { dbPath: dir, maxBytes: 1024 * 1024 } });
+  const peers: Peer[] = [];
   try {
+    const keys = pcKeys();
+    const routeId = createHash('sha256').update(keys.publicKey).digest().subarray(0, 16).toString('hex');
+    const pc = await peer(relay.port, { type: 'hello', role: 'pc', routeId, token: TOKEN, pk: keys.publicKey.toString('base64url') }, keys);
+    peers.push(pc);
+    await waitUntil(() => pc.texts.some((t) => t['type'] === 'welcome'));
+    const phone = await peer(relay.port, { type: 'hello', role: 'phone', routeId, token: TOKEN });
+    peers.push(phone);
+    await waitUntil(() => pc.texts.some((t) => t['type'] === 'session_open') && phone.texts.some((t) => t['type'] === 'pc_online'));
+    const sessionId = String(pc.texts.find((t) => t['type'] === 'session_open')!['sessionId']);
+
+    phone.ws.send(Buffer.from([1, 2, 3]));
+    await waitUntil(() => pc.binaries.length === 1);
+
+    // 转发进行中触发收集 500，之后两个方向仍能收发
     const status = await fetch(`http://127.0.0.1:${relay.port}/collect/v1/events`, { method: 'POST', body: eventsBody([event()]) }).then((r) => r.status);
     assert.equal(status, 500);
-    const welcome = await new Promise<string>((resolve, reject) => {
-      const ws = new WebSocket(`ws://127.0.0.1:${relay.port}/v1`);
-      ws.on('message', (d: Buffer, bin: boolean) => {
-        if (bin) return;
-        resolve(String((JSON.parse(d.toString()) as { type: string }).type));
-        ws.close();
-      });
-      ws.once('open', () => ws.send(JSON.stringify({ type: 'hello', role: 'phone', routeId: 'a'.repeat(32), token: TOKEN })));
-      ws.once('error', reject);
-    });
-    assert.equal(welcome, 'welcome');
+
+    phone.ws.send(Buffer.from([4, 5]));
+    await waitUntil(() => pc.binaries.length === 2);
+    assert.equal(pc.binaries[1]!.toString('hex'), `${sessionId}0405`);
+    pc.ws.send(Buffer.concat([Buffer.from(sessionId, 'hex'), Buffer.from([9])]));
+    await waitUntil(() => phone.binaries.length === 1);
+    assert.deepEqual([...phone.binaries[0]!], [9]);
   } finally {
+    for (const p of peers) p.ws.terminate();
     await relay.close();
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('events whitelist', async () => {
+  await withCollect(async ({ post, db, clock }) => {
+    const path = '/collect/v1/events';
+    const ev = (over: Record<string, unknown>) => ({ ts: 1, kind: 'error', name: 'app.crash', data: { code: 'E1' }, ...over });
+    const bad: unknown[] = [
+      ev({ ts: '1' }),
+      ev({ name: 5 }),
+      ev({ name: 'x'.repeat(65) }),
+      ev({ name: 'Has Upper' }),
+      ev({ name: 'has space' }),
+      ev({ data: { nested: { a: 1 } } }),
+      ev({ data: { list: [1] } }),
+      ev({ data: { text: 'x'.repeat(65) } }),
+      ev({ data: { text: 'a\u001bb' } }),
+      ev({ data: { 'bad key': 1 } }),
+    ];
+    for (const e of bad) {
+      clock.t += 61_000;
+      assert.equal(await post(path, eventsBody([ev({}), e])), 400, JSON.stringify(e));
+    }
+    // 短字段：带控制字符、过长
+    for (const extra of [{ installId: 'a'.repeat(65) }, { installId: 'a\nb' }, { appVersion: 'v'.repeat(33) }, { os: 'o'.repeat(65) }, { os: 'x\u0000' }]) {
+      clock.t += 61_000;
+      assert.equal(await post(path, eventsBody([ev({})], extra)), 400, JSON.stringify(extra));
+    }
+    // 合规：data 值为 string/number/boolean/null
+    clock.t += 61_000;
+    assert.equal(await post(path, eventsBody([ev({ name: 'a/b_c-d.e1', data: { s: 'ok', n: 1.5, b: false, z: null, presetId: 'p1' } })])), 204);
+    // 被拒绝的整批都没有落库
+    assert.equal(rows(db, 'SELECT count(*) AS c FROM events')[0]!['c'], 1);
+  });
+});
+
+test('wrong field types and encodings', async () => {
+  await withCollect(async ({ post, clock }) => {
+    const cases: [string, Buffer | string, Record<string, string>?][] = [
+      ['/collect/v1/feedback', feedbackBody({ contact: 5 })],
+      ['/collect/v1/feedback', feedbackBody({ logs: { a: 1 } })],
+      ['/collect/v1/feedback', feedbackBody({ logs: 5 })],
+      ['/collect/v1/feedback', feedbackBody({ description: 7 })],
+      ['/collect/v1/feedback', feedbackBody({ contact: 'a\u0007b' })],
+      ['/collect/v1/events', eventsBody([event()]), { 'content-encoding': 'br' }],
+      ['/collect/v1/feedback', feedbackBody(), { 'content-encoding': 'br' }],
+    ];
+    for (const [path, body, headers] of cases) {
+      clock.t += 61_000;
+      assert.equal(await post(path, body, headers), 400, `${path} ${String(body).slice(0, 80)}`);
+    }
+    // 描述允许换行
+    clock.t += 61_000;
+    assert.equal(await post('/collect/v1/feedback', feedbackBody({ description: '第一行\n第二行' })), 204);
+  });
+});
+
+test('drains oversized request after 429', async () => {
+  await withCollect(async ({ post, relay, clock }) => {
+    const path = '/collect/v1/events';
+    for (let i = 0; i < 30; i += 1) assert.equal(await post(path, eventsBody([event(i)])), 204);
+    // 限流 429 时带着较大的请求体：先回响应，之后服务仍正常
+    assert.equal(await post(path, JSON.stringify({ pad: 'x'.repeat(200 * 1024) })), 429);
+    const other = await fetch(`http://127.0.0.1:${relay.port}/collect/v1/feedback`, { method: 'POST', body: feedbackBody() });
+    assert.equal(other.status, 204);
+    clock.t += 61_000;
+    assert.equal(await post(path, eventsBody([event(99)])), 204);
+  });
+});
+
+test('global write cap', async () => {
+  await withCollect(async ({ post, clock }) => {
+    // 每条反馈解压后约 7.5 MB，压缩后很小；三条合计超过 20 MB/分钟
+    const big = (n: number) => gz(feedbackBody({ installId: `install-big${n}`, logs: 'a'.repeat(7.5 * 1024 * 1024) }));
+    assert.equal(await post('/collect/v1/feedback', big(1), { 'content-encoding': 'gzip' }), 204);
+    assert.equal(await post('/collect/v1/feedback', big(2), { 'content-encoding': 'gzip' }), 204);
+    assert.equal(await post('/collect/v1/feedback', big(3), { 'content-encoding': 'gzip' }), 429);
+    // 窗口过去后恢复
+    clock.t += 61_000;
+    assert.equal(await post('/collect/v1/feedback', big(4), { 'content-encoding': 'gzip' }), 204);
+  });
+});
+
+test('collector closed returns 503 and does not reopen', async () => {
+  const dir = tmp();
+  const db = join(dir, 'collect.db');
+  const collector = createCollector({ dbPath: db, maxBytes: 1024 * 1024, now: Date.now, log: () => {} });
+  collector.close();
+  const server = createServer((req, res) => {
+    void collector.handle(req, res, '127.0.0.1');
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const port = (server.address() as AddressInfo).port;
+    const res = await fetch(`http://127.0.0.1:${port}/collect/v1/events`, { method: 'POST', body: eventsBody([event()]) });
+    assert.equal(res.status, 503);
+    assert.deepEqual(readdirSync(dir), []);
+  } finally {
+    server.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('query strips control characters and filters by kind', async () => {
+  await withCollect(async ({ post, db }) => {
+    const esc = String.fromCharCode(0x1b);
+    // 服务端会拒绝控制符，这里模拟旧数据或被绕过的情况，直接写库
+    await post('/collect/v1/feedback', feedbackBody());
+    const w = new DatabaseSync(db);
+    w.prepare('UPDATE feedback SET description = ?, logs = ?, contact = ? WHERE id = 1').run(`带转义${esc}[31m红
+第二行`, `日志${esc}]0;title${String.fromCharCode(7)}尾`, `c${esc}x`);
+    w.close();
+    await post('/collect/v1/events', eventsBody([event(1, 'crash'), event(2, 'start')]));
+    const run = (...args: string[]) => spawnSync(process.execPath, [QUERY, ...args, '--db', db], { encoding: 'utf8', timeout: 10000 });
+    const show = run('feedback-show', '1');
+    assert.equal(show.status, 0, show.stderr);
+    assert.ok(!/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/.test(show.stdout));
+    assert.match(show.stdout, /带转义\[31m红\n第二行/);
+    assert.ok(!/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/.test(run('feedback').stdout));
+    const crash = run('events', '--days', '36500', '--kind', 'crash');
+    assert.match(crash.stdout, /n1/);
+    assert.doesNotMatch(crash.stdout, /n2/);
+  });
+});
+
+test('collect disabled keeps plain ws behavior', async () => {
+  const relay = await startRelay({ host: '127.0.0.1', port: 0, token: TOKEN });
+  try {
+    assert.equal(await fetch(`http://127.0.0.1:${relay.port}/v1`).then((r) => r.status), 426);
+    assert.equal(await fetch(`http://127.0.0.1:${relay.port}/`).then((r) => r.status), 426);
+    const outcome = await new Promise<string>((resolve) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${relay.port}/other`);
+      ws.once('unexpected-response', (_req, res) => resolve(String(res.statusCode)));
+      ws.once('open', () => resolve('open'));
+      ws.once('error', () => {});
+    });
+    assert.equal(outcome, '400');
+  } finally {
+    await relay.close();
   }
 });
 

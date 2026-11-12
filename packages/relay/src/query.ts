@@ -8,7 +8,7 @@ import { DatabaseSync } from 'node:sqlite';
 const DAY_MS = 24 * 3600_000;
 
 const USAGE = `用法：
-  query events [--days N] [--name X]   按 版本/事件名 计数（默认最近 7 天）
+  query events [--days N] [--name X] [--kind K]   按 版本/事件名 计数（默认最近 7 天）
   query feedback [--limit N]           最近的反馈列表（默认 20 条）
   query feedback-show <id>             单条反馈的完整内容（含日志）
   query install <installId>            某个安装的事件与反馈
@@ -16,8 +16,13 @@ const USAGE = `用法：
 
 type Row = Record<string, unknown>;
 
+// 去掉 C0/C1 控制符（保留 \n \t），防止收集内容里的转义序列污染终端
+function clean(value: unknown): string {
+  return String(value ?? '').replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '');
+}
+
 function cell(value: unknown): string {
-  return String(value ?? '').replace(/\s+/g, ' ');
+  return clean(value).replace(/\s+/g, ' ');
 }
 
 // 中日文字符占两列宽
@@ -52,6 +57,7 @@ export function runQuery(argv: string[], env: NodeJS.ProcessEnv, now: () => numb
       db: { type: 'string' },
       days: { type: 'string' },
       name: { type: 'string' },
+      kind: { type: 'string' },
       limit: { type: 'string' },
     },
   });
@@ -67,10 +73,10 @@ export function runQuery(argv: string[], env: NodeJS.ProcessEnv, now: () => numb
         const rows = db
           .prepare(
             `SELECT app_version, name, count(*) AS n FROM events
-             WHERE received_at >= ? AND (? IS NULL OR name = ?)
+             WHERE received_at >= ? AND (? IS NULL OR name = ?) AND (? IS NULL OR kind = ?)
              GROUP BY app_version, name ORDER BY app_version DESC, n DESC, name`,
           )
-          .all(since, values.name ?? null, values.name ?? null) as Row[];
+          .all(since, values.name ?? null, values.name ?? null, values.kind ?? null, values.kind ?? null) as Row[];
         return table(['版本', '事件', '次数'], rows.map((r) => [cell(r['app_version']), cell(r['name']), cell(r['n'])]));
       }
       case 'feedback': {
@@ -100,10 +106,10 @@ export function runQuery(argv: string[], env: NodeJS.ProcessEnv, now: () => numb
           `联系方式: ${cell(r['contact'])}`,
           '',
           '描述:',
-          String(r['description']),
+          clean(r['description']),
           '',
           '日志:',
-          String(r['logs'] ?? '（无）'),
+          clean(r['logs'] ?? '（无）'),
         ].join('\n');
       }
       case 'install': {

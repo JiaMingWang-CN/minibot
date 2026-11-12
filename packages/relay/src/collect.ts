@@ -16,6 +16,10 @@ const FEEDBACK_MAX_INFLATED = 8 * 1024 * 1024;
 const DESCRIPTION_MAX = 5000;
 const CONTACT_MAX = 200;
 const EVENT_DATA_MAX = 4096;
+const EVENT_DATA_STRING_MAX = 64;
+const WRITE_CAP_BYTES = 20 * 1024 * 1024;
+const BODY_TIMEOUT_MS = 30_000;
+const MAX_CONCURRENT = 64;
 const WINDOW_MS = 60_000;
 const EVENTS_PER_MINUTE = 30;
 const FEEDBACK_PER_MINUTE = 3;
@@ -66,9 +70,34 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+// 控制字符（C0/C1/DEL）不允许出现在元数据字段里
+const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
+const DESCRIPTION_CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/;
+const EVENT_NAME = /^[a-z0-9._/-]{1,64}$/;
+const DATA_KEY = /^[A-Za-z0-9._-]{1,64}$/;
+
+/** 非空、长度受限、无控制字符的短字符串 */
 function shortString(value: unknown, max: number): string {
-  if (typeof value !== 'string' || value.length === 0 || value.length > max) throw new Reject(400);
+  if (typeof value !== 'string' || value.length === 0 || value.length > max || CONTROL.test(value)) throw new Reject(400);
   return value;
+}
+
+/** 事件 data：扁平对象，值只能是 string(≤64)/有限 number/boolean/null */
+function eventData(value: unknown): string {
+  if (!isRecord(value)) throw new Reject(400);
+  for (const [key, item] of Object.entries(value)) {
+    if (!DATA_KEY.test(key)) throw new Reject(400);
+    if (typeof item === 'string') {
+      if (item.length > EVENT_DATA_STRING_MAX || CONTROL.test(item)) throw new Reject(400);
+    } else if (typeof item === 'number') {
+      if (!Number.isFinite(item)) throw new Reject(400);
+    } else if (typeof item !== 'boolean' && item !== null) {
+      throw new Reject(400);
+    }
+  }
+  const json = JSON.stringify(value);
+  if (json.length > EVENT_DATA_MAX) throw new Reject(400);
+  return json;
 }
 
 function common(body: Record<string, unknown>): Common {
@@ -82,6 +111,9 @@ function common(body: Record<string, unknown>): Common {
   };
 }
 
+/** 读 body 超时：不回响应，直接销毁连接 */
+class BodyTimeout extends Error {}
+
 function readBody(req: IncomingMessage, limit: number): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const declared = Number(req.headers['content-length']);
@@ -89,11 +121,16 @@ function readBody(req: IncomingMessage, limit: number): Promise<Buffer> {
       reject(new Reject(413));
       return;
     }
+    const timer = setTimeout(() => {
+      req.removeAllListeners('data');
+      reject(new BodyTimeout());
+    }, BODY_TIMEOUT_MS);
     const chunks: Buffer[] = [];
     let size = 0;
     req.on('data', (chunk: Buffer) => {
       size += chunk.length;
       if (size > limit) {
+        clearTimeout(timer);
         chunks.length = 0;
         reject(new Reject(413));
         req.removeAllListeners('data');
@@ -102,8 +139,14 @@ function readBody(req: IncomingMessage, limit: number): Promise<Buffer> {
       }
       chunks.push(chunk);
     });
-    req.once('end', () => resolve(Buffer.concat(chunks)));
-    req.once('error', reject);
+    req.once('end', () => {
+      clearTimeout(timer);
+      resolve(Buffer.concat(chunks));
+    });
+    req.once('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
   });
 }
 
@@ -118,12 +161,16 @@ function inflate(raw: Buffer, limit: number): Promise<Buffer> {
 
 export function createCollector(o: CollectorOptions): Collector {
   let stmts: Statements | null = null;
+  let closed = false;
+  let active = 0;
+  const writes: { t: number; bytes: number }[] = [];
   const eventHits = new Map<string, number[]>();
   const feedbackHits = new Map<string, number[]>();
   const installDaily = new Map<string, { day: number; count: number }>();
 
   // 懒打开：路径有问题只让收集请求报 500，不会让中继启动失败或影响转发
   const open = (): Statements => {
+    if (closed) throw new Reject(503);
     if (stmts !== null) return stmts;
     mkdirSync(dirname(o.dbPath), { recursive: true });
     const db = new DatabaseSync(o.dbPath);
@@ -186,7 +233,19 @@ export function createCollector(o: CollectorOptions): Collector {
     return row.bytes >= o.maxBytes;
   };
 
-  const readJson = async (req: IncomingMessage, maxRaw: number, maxInflated: number): Promise<Record<string, unknown>> => {
+  /** 全局（不分 IP）每分钟写入量上限，按解压后字节计；超过返回 429 */
+  const reserveWrite = (bytes: number): void => {
+    const t = o.now();
+    while (writes.length > 0 && t - writes[0]!.t >= WINDOW_MS) writes.shift();
+    if (writes.reduce((sum, w) => sum + w.bytes, 0) + bytes > WRITE_CAP_BYTES) throw new Reject(429);
+    writes.push({ t, bytes });
+  };
+
+  const readJson = async (
+    req: IncomingMessage,
+    maxRaw: number,
+    maxInflated: number,
+  ): Promise<{ body: Record<string, unknown>; bytes: number }> => {
     const encoding = req.headers['content-encoding'];
     if (encoding !== undefined && encoding !== 'gzip' && encoding !== 'identity') throw new Reject(400);
     let body = await readBody(req, maxRaw);
@@ -199,12 +258,12 @@ export function createCollector(o: CollectorOptions): Collector {
       throw new Reject(400);
     }
     if (!isRecord(parsed)) throw new Reject(400);
-    return parsed;
+    return { body: parsed, bytes: body.length };
   };
 
   const events = async (req: IncomingMessage, ip: string): Promise<void> => {
     if (overLimit(eventHits, ip, EVENTS_PER_MINUTE)) throw new Reject(429);
-    const body = await readJson(req, EVENTS_MAX_RAW, EVENTS_MAX_INFLATED);
+    const { body, bytes } = await readJson(req, EVENTS_MAX_RAW, EVENTS_MAX_INFLATED);
     const list = body['events'];
     if (!Array.isArray(list)) throw new Reject(400);
     if (list.length > EVENTS_MAX_COUNT) throw new Reject(413);
@@ -214,11 +273,12 @@ export function createCollector(o: CollectorOptions): Collector {
       const ts = item['ts'];
       const kind = shortString(item['kind'], 16);
       const data = item['data'];
-      if (typeof ts !== 'number' || !Number.isFinite(ts) || !KINDS.has(kind) || !isRecord(data)) throw new Reject(400);
-      const dataJson = JSON.stringify(data);
-      if (dataJson.length > EVENT_DATA_MAX) throw new Reject(400);
-      return { kind, name: shortString(item['name'], 64), dataJson };
+      if (typeof ts !== 'number' || !Number.isFinite(ts) || !KINDS.has(kind)) throw new Reject(400);
+      const name = item['name'];
+      if (typeof name !== 'string' || !EVENT_NAME.test(name)) throw new Reject(400);
+      return { kind, name, dataJson: eventData(data) };
     });
+    reserveWrite(bytes);
     const s = open();
     if (storageFull(s)) throw new Reject(507);
     const receivedAt = o.now();
@@ -237,9 +297,13 @@ export function createCollector(o: CollectorOptions): Collector {
 
   const feedback = async (req: IncomingMessage, ip: string): Promise<void> => {
     if (overLimit(feedbackHits, ip, FEEDBACK_PER_MINUTE)) throw new Reject(429);
-    const body = await readJson(req, FEEDBACK_MAX_RAW, FEEDBACK_MAX_INFLATED);
+    const { body, bytes } = await readJson(req, FEEDBACK_MAX_RAW, FEEDBACK_MAX_INFLATED);
     const meta = common(body);
-    const description = shortString(body['description'], DESCRIPTION_MAX);
+    const description = body['description'];
+    // 描述允许换行与制表符，其余控制字符不允许
+    if (typeof description !== 'string' || description.length === 0 || description.length > DESCRIPTION_MAX || DESCRIPTION_CONTROL.test(description)) {
+      throw new Reject(400);
+    }
     const contact = body['contact'] === undefined ? null : shortString(body['contact'], CONTACT_MAX);
     const logs = body['logs'];
     if (logs !== undefined && typeof logs !== 'string') throw new Reject(400);
@@ -247,6 +311,7 @@ export function createCollector(o: CollectorOptions): Collector {
     const daily = installDaily.get(meta.installId);
     const count = daily !== undefined && daily.day === day ? daily.count : 0;
     if (count >= FEEDBACK_PER_INSTALL_PER_DAY) throw new Reject(429);
+    reserveWrite(bytes);
     const s = open();
     if (storageFull(s)) throw new Reject(507);
     s.insertFeedback.run(o.now(), meta.installId, meta.platform, meta.appVersion, meta.os, description, contact, logs ?? null);
@@ -295,19 +360,31 @@ export function createCollector(o: CollectorOptions): Collector {
         finish(req, res, 404);
         return;
       }
+      if (active >= MAX_CONCURRENT) {
+        finish(req, res, 503);
+        return;
+      }
+      active += 1;
       try {
         await route(req, ip);
         finish(req, res, 204);
       } catch (err) {
+        if (err instanceof BodyTimeout) {
+          req.socket.destroy();
+          return;
+        }
         if (err instanceof Reject) {
           finish(req, res, err.status);
           return;
         }
         o.log(`收集错误：${err instanceof Error ? err.message : 'unknown'}`);
         finish(req, res, 500);
+      } finally {
+        active -= 1;
       }
     },
     close() {
+      closed = true;
       clearInterval(sweep);
       try {
         stmts?.db.close();
