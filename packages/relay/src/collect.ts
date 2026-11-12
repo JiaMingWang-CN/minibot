@@ -16,6 +16,7 @@ const FEEDBACK_MAX_INFLATED = 8 * 1024 * 1024;
 const DESCRIPTION_MAX = 5000;
 const CONTACT_MAX = 200;
 const EVENT_DATA_MAX = 4096;
+const STACK_MAX = 4096;
 const EVENT_DATA_STRING_MAX = 64;
 const WRITE_CAP_BYTES = 20 * 1024 * 1024;
 const BODY_TIMEOUT_MS = 30_000;
@@ -82,12 +83,14 @@ function shortString(value: unknown, max: number): string {
   return value;
 }
 
-/** 事件 data：扁平对象，值只能是 string(≤64)/有限 number/boolean/null */
+/** 事件 data：扁平对象，值只能是 string(≤64)/有限 number/boolean/null；唯一例外是 stack（≤4096 字、允许换行） */
 function eventData(value: unknown): string {
   if (!isRecord(value)) throw new Reject(400);
   for (const [key, item] of Object.entries(value)) {
     if (!DATA_KEY.test(key)) throw new Reject(400);
-    if (typeof item === 'string') {
+    if (key === 'stack') {
+      if (typeof item !== 'string' || item.length > STACK_MAX || DESCRIPTION_CONTROL.test(item)) throw new Reject(400);
+    } else if (typeof item === 'string') {
       if (item.length > EVENT_DATA_STRING_MAX || CONTROL.test(item)) throw new Reject(400);
     } else if (typeof item === 'number') {
       if (!Number.isFinite(item)) throw new Reject(400);
@@ -96,7 +99,7 @@ function eventData(value: unknown): string {
     }
   }
   const json = JSON.stringify(value);
-  if (json.length > EVENT_DATA_MAX) throw new Reject(400);
+  if (json.length > EVENT_DATA_MAX + STACK_MAX * 2) throw new Reject(400);
   return json;
 }
 

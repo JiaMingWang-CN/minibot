@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - 上传内容（事件、反馈、日志附件）永不含：消息正文、bot 人设、记忆内容、API Key、中继口令、配对 psk / 私钥、图片内容。日志本身就不写这些。
-- 事件只允许白名单字段：枚举值、数字、布尔、错误类型 / 错误码、脱敏后的堆栈、模型 id、服务 presetId（自定义服务只报 `format`，不报 `baseUrl`）。不允许自由文本字段。
+- 事件只允许白名单字段：枚举值、数字、布尔、错误类型 / 错误码、脱敏后的堆栈、模型 id、服务 presetId（自定义服务只报 `format`，不报 `baseUrl`）。不允许自由文本字段。`data` 的值只能是 string / number / boolean / null；string 默认 ≤ 64 字，唯一例外是键 `stack`（脱敏后的堆栈）：≤ 4096 字，允许 `\n`，其他控制字符拒绝。中继与客户端用同一规则。
 - 收集点地址源码里无默认值；只由构建时环境变量 `MINIBOT_COLLECT_URL` 写入；为空时上传与反馈整体关闭（反馈入口隐藏）。
 - 同意状态三值 `unset` / `on` / `off`：`unset` 只入队不上传；`off` 不入队并清空队列；反馈不受此开关限制。
 - 中继：不设 `RELAY_COLLECT_DB` 时 `/collect/*` 返回 `404` 且不创建任何文件；`/v1` WebSocket 行为与现有测试完全不变；收集路径的任何错误不得影响转发。
@@ -96,7 +96,7 @@
 **思路:**
 - `write` 同步追加到内存缓冲，`setImmediate` 批量 `appendFile`，避免阻塞调用方；按日期切文件；启动与每次切文件时清理：先删超过 7 天的，再从最旧删到总量 ≤ 上限。
 - 每行写盘前依次过 `secrets.redact`（已有 `SecretSet`，内核会把 API Key 与中继口令都登记进去——确认 RemoteStore 的中继口令也 `add` 进 `secretSet`）和 `redactLike`。
-- `event` 参数存在时，对其 `data` 做白名单校验（值只能是 string/number/boolean/null，string 必须是短的枚举形态 ≤ 64 字且过 `scrubPaths`），通过后带 `ts` 通知 `onEvent` 订阅者；不合规字段丢弃并在日志记一条 `warn`。
+- `event` 参数存在时，对其 `data` 做白名单校验（值只能是 string/number/boolean/null，string 必须是短的枚举形态 ≤ 64 字且过 `scrubPaths`；与中继同规则，唯一例外是键 `stack`：≤ 4096 字、允许 `\n`、其他控制字符丢弃该字段，且 `stack` 必须是 `scrubStack` 后的结果），通过后带 `ts` 通知 `onEvent` 订阅者；不合规字段丢弃并在日志记一条 `warn`。
 - 插桩点（area 名）：`model`（client.ts：presetId/format、模型 id、耗时、tokens、成功/失败、HTTP 状态；失败时完整日志写错误报文，事件 `error/model.request` 只带状态码与错误类别）、`tool`（registry.ts：工具名、退出码、耗时、拒绝/超时；完整日志写命令原文与路径，事件 `error/tool.<name>` 只带退出码与类别）、`remote`（relay-link.ts 与 gateway.ts：连接、断线原因、握手失败、配对结果，事件 `error/remote.connect`、`error/remote.pair`）、`app`（kernel init：事件 `start/app.start` 带 `appVersion`、`os`）。
 - 内核 `Kernel.open` 新增可选 `appVersion?: string`（桌面传 `app.getVersion()`）。
 - 绝不在任何插桩点传入消息正文、人设、记忆、图片。

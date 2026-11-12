@@ -342,6 +342,25 @@ test('events whitelist', async () => {
   });
 });
 
+test('events stack exception', async () => {
+  await withCollect(async ({ post, db, clock }) => {
+    const path = '/collect/v1/events';
+    const withStack = (stack: unknown) => eventsBody([{ ts: 1, kind: 'error', name: 'error.x', data: { code: 'E', stack } }]);
+    const line = 'at fn (app.asar/dist/main.cjs:10:5)\n';
+    const ok = line.repeat(200).slice(0, 4096);
+    assert.equal(ok.length, 4096);
+    assert.equal(await post(path, withStack(ok)), 204);
+    clock.t += 61_000;
+    assert.equal(await post(path, withStack(ok + 'x')), 400);
+    assert.equal(await post(path, withStack(`at a${String.fromCharCode(27)}[31m`)), 400);
+    assert.equal(await post(path, withStack(`a${String.fromCharCode(13)}b`)), 400);
+    assert.equal(await post(path, withStack(5)), 400);
+    // 其他键的长字符串仍然受 64 字限制
+    assert.equal(await post(path, eventsBody([{ ts: 1, kind: 'error', name: 'error.x', data: { other: 'x'.repeat(65) } }])), 400);
+    assert.equal(rows(db, 'SELECT count(*) AS c FROM events')[0]!['c'], 1);
+  });
+});
+
 test('wrong field types and encodings', async () => {
   await withCollect(async ({ post, clock }) => {
     const cases: [string, Buffer | string, Record<string, string>?][] = [

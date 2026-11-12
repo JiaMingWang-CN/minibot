@@ -39,7 +39,7 @@
 
 - `POST /collect/v1/events`：客户端上传的匿名事件。服务端强制白名单，任一不合规整批返回 `400`：
   - `kind` 只能是 `start` / `error` / `crash` / `metric` / `update`；`name` 匹配 `^[a-z0-9._/-]{1,64}$`；`ts` 是有限数字。
-  - `data` 是扁平对象，键匹配 `^[A-Za-z0-9._-]{1,64}$`，值只能是 string（至多 64 字、无控制字符）、有限 number、boolean 或 null；序列化后不超过 4096 字符。
+  - `data` 是扁平对象，键匹配 `^[A-Za-z0-9._-]{1,64}$`，值只能是 string（至多 64 字、无控制字符）、有限 number、boolean 或 null；唯一例外是键 `stack`：字符串至多 4096 字，允许换行，其他控制字符一律拒绝（客户端要先做脱敏）。除 `stack` 外序列化后不超过 4096 字符。
   - `installId`（至多 64）、`appVersion`（至多 32）、`os`（至多 64）为无控制字符的非空字符串，`platform` 只能是 `win32` 或 `android`。
 - `POST /collect/v1/feedback`：用户主动提交的反馈：`description`（至多 5000 字，允许换行）、可选 `contact`（至多 200 字）、可选脱敏日志 `logs`（字符串）。
 
