@@ -244,6 +244,116 @@ class ConnectorTest {
         assertEquals("ready", got.single().getString("t"))
     }
 
+    /** 一台电脑、一次配对邀请：第一条有效的第三条握手消息作废邀请，之后的一律正常关闭（同电脑端网关） */
+    private inner class SharedPc(val psk: ByteArray) {
+        var offerValid = true
+        val pairedOn = mutableListOf<PairLink>()
+    }
+
+    /** 通到 SharedPc 的一条局域网承载；up 是手机发出的第 i 帧到达电脑的延迟，down 是电脑到手机的延迟 */
+    private inner class PairLink(
+        private val pc: SharedPc,
+        private val scope: CoroutineScope,
+        private val up: List<Long>,
+        private val down: Long,
+    ) : Carrier {
+        override var onOpen: () -> Unit = {}
+        override var onPeer: (Boolean) -> Unit = {}
+        override var onFrame: (ByteArray) -> Unit = {}
+        override var onClose: (CloseReason) -> Unit = {}
+        private var closed = false
+        private var sent = 0
+        private var hs: Handshake? = null
+        private var pcChannel: SecureChannel? = null
+        private val pcSide = object : Carrier {
+            override var onOpen: () -> Unit = {}
+            override var onPeer: (Boolean) -> Unit = {}
+            override var onFrame: (ByteArray) -> Unit = {}
+            override var onClose: (CloseReason) -> Unit = {}
+            override fun send(frame: ByteArray) = toPhone(frame)
+            override fun close() {}
+        }
+
+        init {
+            scope.launch { onOpen() }
+        }
+
+        private fun toPhone(frame: ByteArray) {
+            scope.launch {
+                delay(down)
+                if (!closed) onFrame(frame)
+            }
+        }
+
+        override fun send(frame: ByteArray) {
+            if (closed) return
+            val wait = up[minOf(sent++, up.size - 1)]
+            // 已经发出去的帧照样到达电脑，之后手机再关连接也撤不回
+            scope.launch {
+                delay(wait)
+                atPc(frame)
+            }
+        }
+
+        private fun atPc(frame: ByteArray) {
+            if (pcChannel != null) return pcSide.onFrame(frame)
+            val current = hs
+            if (current == null) {
+                val h = Handshake(NoisePattern.XXpsk3, false, this@ConnectorTest.pc, psk = pc.psk)
+                hs = h
+                h.readMessage(frame.copyOfRange(1, frame.size))
+                toPhone(byteArrayOf(FRAME_PAIR) + h.writeMessage(ByteArray(0)))
+                return
+            }
+            if (!pc.offerValid) {
+                scope.launch {
+                    delay(down)
+                    closed = true
+                    onClose(CloseReason.Normal)
+                }
+                return
+            }
+            current.readMessage(frame.copyOfRange(1, frame.size))
+            pc.offerValid = false
+            pc.pairedOn.add(this)
+            val (send, recv) = current.split()
+            val channel = SecureChannel(pcSide, send, recv)
+            pcChannel = channel
+            channel.send(JSONObject().put("t", "paired"))
+            channel.send(JSONObject().put("t", "ready").put("pcName", "测试电脑"))
+        }
+
+        override fun close() {
+            closed = true
+        }
+    }
+
+    @Test
+    fun pairingOverTwoLanPathsToSamePcUsesTheClaimedPath() = runTest {
+        val psk = Noise.generateKeyPair().privateKey
+        val shared = SharedPc(psk)
+        // 两条线路的第二条握手消息同时到：A 先被手机选中，但 A 的上行慢，B 的第三条消息先到电脑
+        val links = listOf(
+            PairLink(shared, backgroundScope, up = listOf(0, 50), down = 1),
+            PairLink(shared, backgroundScope, up = listOf(0, 0), down = 1),
+        )
+        var next = 0
+        val factory = object : CarrierFactory {
+            // 配对之后转入日常连接：后续承载永远打不开即可
+            override fun lan(address: String, port: Int): Carrier =
+                links.getOrNull(next++) ?: ScriptedCarrier(Script(null), backgroundScope, false)
+            override fun relay(url: String, routeId: String, token: String?): Carrier = error("不应走中继")
+        }
+        val store = MemoryPairingStore(null, phone)
+        val c = Connector(backgroundScope, store, factory)
+        val offer = PairingOffer("测试电脑", pc.publicKey, psk, null, null, listOf("198.18.0.1", "192.168.1.5"), 4590)
+        // 失败时抛 PairingFailedException（修复前："连接已关闭"）
+        c.pair(offer, "测试手机")
+        assertTrue(store.load() != null)
+        assertEquals(1, shared.pairedOn.size)
+        c.stop()
+    }
+
     @Test
     fun stopReturnsToIdle() = runTest {
         val factory = Factory(backgroundScope, relay = Script(0))

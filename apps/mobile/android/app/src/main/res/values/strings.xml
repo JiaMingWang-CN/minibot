@@ -20,7 +20,9 @@
     <string name="approval_public">打开 minibot 查看</string>
     <string name="done_title">%1$s 已完成</string>
 
-    <string name="scan_prompt">对准电脑上的配对二维码</string>
+    <string name="scan_title">扫描配对二维码</string>
+    <string name="scan_prompt">在电脑端打开“手机”页，点“配对新手机”，把二维码放进框内</string>
+    <string name="scan_close">关闭</string>
     <string name="error_offline">电脑未连接</string>
     <string name="error_timeout">电脑没有响应</string>
     <string name="error_not_paired">尚未配对</string>

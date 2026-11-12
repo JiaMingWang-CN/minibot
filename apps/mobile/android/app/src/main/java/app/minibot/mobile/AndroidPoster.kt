@@ -34,7 +34,7 @@ class AndroidPoster(private val context: Context) : NotificationPoster {
 
     /** 常驻的连接状态通知 */
     fun connection(text: String) = NotificationCompat.Builder(context, CHANNEL_CONNECTION)
-        .setSmallIcon(R.mipmap.ic_launcher)
+        .setSmallIcon(R.drawable.ic_notification)
         .setContentTitle(context.getString(R.string.app_name))
         .setContentText(text)
         .setOngoing(true)
@@ -44,7 +44,7 @@ class AndroidPoster(private val context: Context) : NotificationPoster {
 
     override fun post(channel: String, key: String, title: String, text: String, publicText: String?, threadId: String?) {
         val builder = NotificationCompat.Builder(context, channel)
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(title)
             .setContentText(text)
             .setAutoCancel(true)
@@ -54,7 +54,7 @@ class AndroidPoster(private val context: Context) : NotificationPoster {
             builder.setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             builder.setPublicVersion(
                 NotificationCompat.Builder(context, channel)
-                    .setSmallIcon(R.mipmap.ic_launcher)
+                    .setSmallIcon(R.drawable.ic_notification)
                     .setContentTitle(title)
                     .setContentText(publicText)
                     .build(),

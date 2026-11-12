@@ -63,9 +63,8 @@ class MinibotRemotePlugin : Plugin(), HubSink {
     fun scanAndPair(call: PluginCall) {
         val options = ScanOptions()
             .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-            .setPrompt(context.getString(R.string.scan_prompt))
             .setBeepEnabled(false)
-            .setOrientationLocked(false)
+            .setCaptureActivity(ScanActivity::class.java)
         val intent = ScanContract().createIntent(context, options)
         startActivityForResult(call, intent, "scanResult")
     }

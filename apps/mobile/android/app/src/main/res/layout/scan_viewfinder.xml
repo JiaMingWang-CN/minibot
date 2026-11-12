@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DecoratedBarcodeView 的内部布局：去掉红色扫描线、黄色候选点与底部状态文字，取景框外压暗 -->
+<merge xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <com.journeyapps.barcodescanner.BarcodeView
+        android:id="@+id/zxing_barcode_surface"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <com.journeyapps.barcodescanner.ViewfinderView
+        android:id="@+id/zxing_viewfinder_view"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        app:zxing_possible_result_points="@android:color/transparent"
+        app:zxing_viewfinder_laser_visibility="false"
+        app:zxing_viewfinder_mask="#99000000" />
+</merge>

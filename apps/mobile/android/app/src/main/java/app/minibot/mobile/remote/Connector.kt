@@ -54,6 +54,8 @@ private sealed interface Outcome {
 private class Link(val carrier: Carrier, val via: Via) {
     val events = Channel<Ev>(Channel.UNLIMITED)
     @Volatile var channel: SecureChannel? = null
+    /** 配对：第二条握手消息已验过，认领这条线路后调用它发出第三条消息 */
+    @Volatile var completePairing: (() -> Unit)? = null
 
     init {
         carrier.onOpen = { events.trySend(Ev.Opened) }
@@ -288,6 +290,12 @@ class Connector(
                     }
                     if (pair) {
                         phase = Phase.PAIRED
+                        try {
+                            link.completePairing?.invoke()
+                        } catch (e: NoiseException) {
+                            link.close()
+                            return Outcome.Ended(false, "配对握手失败")
+                        }
                     } else {
                         phase = Phase.CONNECTED
                         connectedOnce = true
@@ -350,9 +358,16 @@ class Connector(
                 hs.readMessage(frame.copyOfRange(1, frame.size))
                 // 配对码里的电脑公钥必须与握手里电脑出示的一致
                 if (!hs.remoteStatic().contentEquals(offer.pcPublicKey)) throw NoiseException("电脑身份不符")
-                val hello = JSONObject().put("deviceName", deviceName).toString().toByteArray(Charsets.UTF_8)
-                link.carrier.send(byteArrayOf(FRAME_PAIR) + hs.writeMessage(hello))
-                finishHandshake(link, hs)
+                // 第三条消息会让电脑作废邀请：几条局域网地址可能通到同一台电脑，
+                // 只有被认领的那条线路才能发，否则电脑接受的可能是手机随后关掉的那条
+                link.completePairing = {
+                    val hello = JSONObject().put("deviceName", deviceName).toString().toByteArray(Charsets.UTF_8)
+                    val message = byteArrayOf(FRAME_PAIR) + hs.writeMessage(hello)
+                    // 先装好信道再发：电脑收到后立刻回 paired / ready
+                    finishHandshake(link, hs)
+                    link.carrier.send(message)
+                }
+                link.events.trySend(Ev.Ready)
             } catch (e: NoiseException) {
                 failHandshake(link, "配对握手失败")
             }
