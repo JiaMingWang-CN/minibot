@@ -2,7 +2,8 @@ import tseslint from 'typescript-eslint';
 import reactHooks from 'eslint-plugin-react-hooks';
 
 export default tseslint.config(
-  { ignores: ['**/dist/**', '**/node_modules/**', '.codegraph/**'] },
+  // 安卓工程里只有构建 / cap sync 生成的 JS
+  { ignores: ['**/dist/**', '**/node_modules/**', '.codegraph/**', 'apps/mobile/android/**'] },
   ...tseslint.configs.recommended,
   {
     files: ['apps/renderer/src/**/*.{ts,tsx}', 'apps/mobile/src/**/*.{ts,tsx}'],

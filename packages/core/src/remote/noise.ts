@@ -1,6 +1,5 @@
+import { chacha20poly1305 } from '@noble/ciphers/chacha.js';
 import {
-  createCipheriv,
-  createDecipheriv,
   createHash,
   createHmac,
   createPrivateKey,
@@ -123,28 +122,20 @@ class Cipher implements CipherState {
     return this.key !== null;
   }
 
+  // ChaCha20-Poly1305 用纯 JS 实现：Electron 的 node:crypto（BoringSSL）不支持这个算法
   encryptWithAd(ad: Buffer, plain: Buffer): Buffer {
     if (this.key === null) return plain;
-    const cipher = createCipheriv('chacha20-poly1305', this.key, nonceBytes(this.n), { authTagLength: TAG_LEN });
-    cipher.setAAD(ad, { plaintextLength: plain.length });
-    const body = Buffer.concat([cipher.update(plain), cipher.final()]);
+    const out = chacha20poly1305(this.key, nonceBytes(this.n), ad).encrypt(plain);
     this.n += 1n;
-    return Buffer.concat([body, cipher.getAuthTag()]);
+    return Buffer.from(out.buffer, out.byteOffset, out.byteLength);
   }
 
   decryptWithAd(ad: Buffer, data: Buffer): Buffer {
     if (this.key === null) return data;
     if (data.length < TAG_LEN) throw new Error('密文过短');
-    const body = data.subarray(0, data.length - TAG_LEN);
-    const tag = data.subarray(data.length - TAG_LEN);
-    const decipher = createDecipheriv('chacha20-poly1305', this.key, nonceBytes(this.n), {
-      authTagLength: TAG_LEN,
-    });
-    decipher.setAAD(ad, { plaintextLength: body.length });
-    decipher.setAuthTag(tag);
-    const plain = Buffer.concat([decipher.update(body), decipher.final()]);
+    const out = chacha20poly1305(this.key, nonceBytes(this.n), ad).decrypt(data);
     this.n += 1n;
-    return plain;
+    return Buffer.from(out.buffer, out.byteOffset, out.byteLength);
   }
 
   encrypt(plain: Buffer): Buffer {
