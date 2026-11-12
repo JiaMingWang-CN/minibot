@@ -29,6 +29,7 @@ export function useConversation({
   subscribe,
   botId,
   contextWindow,
+  withContext = true,
   onError,
 }: {
   api: Api;
@@ -36,6 +37,8 @@ export function useConversation({
   subscribe: Subscribe;
   botId: string;
   contextWindow: number;
+  /** 手机端的白名单不含上下文用量接口，传 false 就不去取 */
+  withContext?: boolean;
   onError: (message: string) => void;
 }) {
   const [threads, setThreads] = useState<Thread[]>([]);
@@ -71,9 +74,11 @@ export function useConversation({
   const refreshStats = useCallback(
     (threadId: string): void => {
       void api.usage(threadId).then((u) => activeRef.current === threadId && setUsage(u)).catch(() => {});
-      void api.context(threadId).then((c) => activeRef.current === threadId && setContext(c)).catch(() => {});
+      if (withContext) {
+        void api.context(threadId).then((c) => activeRef.current === threadId && setContext(c)).catch(() => {});
+      }
     },
-    [api],
+    [api, withContext],
   );
 
   // 首次进入：读对话列表（没有就建一个）与待审批

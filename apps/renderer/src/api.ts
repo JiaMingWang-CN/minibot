@@ -64,33 +64,62 @@ export class ApiError extends Error {
 
 export type Api = ReturnType<typeof createApi>;
 
-export function createApi(conn: Conn) {
-  const base = `http://127.0.0.1:${conn.port}`;
+export interface TransportResponse {
+  status: number;
+  json?: unknown;
+  bytes?: Uint8Array;
+  contentType?: string;
+}
 
-  async function request(method: string, path: string, body?: unknown): Promise<Response> {
-    const headers: Record<string, string> = { authorization: `Bearer ${conn.token}` };
-    if (body !== undefined) headers['content-type'] = 'application/json';
-    const init: RequestInit = { method, headers };
-    if (body !== undefined) init.body = JSON.stringify(body);
-    const response = await fetch(base + path, init);
-    if (!response.ok) {
+/** 与承载无关的请求通道：桌面走本机 HTTP，手机走原生桥接 */
+export interface Transport {
+  request(method: string, path: string, body?: unknown): Promise<TransportResponse>;
+}
+
+export function localTransport(conn: Conn): Transport {
+  const base = `http://127.0.0.1:${conn.port}`;
+  return {
+    async request(method, path, body) {
+      const headers: Record<string, string> = { authorization: `Bearer ${conn.token}` };
+      if (body !== undefined) headers['content-type'] = 'application/json';
+      const init: RequestInit = { method, headers };
+      if (body !== undefined) init.body = JSON.stringify(body);
+      const response = await fetch(base + path, init);
+      const contentType = response.headers.get('content-type') ?? undefined;
+      if (contentType !== undefined && !contentType.includes('json') && response.ok) {
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        return { status: response.status, bytes, contentType };
+      }
+      const text = await response.text();
+      let json: unknown;
+      if (text.length > 0) {
+        try {
+          json = JSON.parse(text);
+        } catch {
+          // 非 JSON 的错误响应：只保留状态码
+        }
+      }
+      return { status: response.status, json, contentType };
+    },
+  };
+}
+
+export function createApi(transport: Transport) {
+  async function request(method: string, path: string, body?: unknown): Promise<TransportResponse> {
+    const response = await transport.request(method, path, body);
+    if (response.status < 200 || response.status >= 300) {
       let code = 'http_error';
       let message = `HTTP ${response.status}`;
-      try {
-        const payload = (await response.json()) as { error?: { code?: string; message?: string } };
-        if (payload.error?.code !== undefined) code = payload.error.code;
-        if (payload.error?.message !== undefined) message = payload.error.message;
-      } catch {
-        // 保留默认信息
-      }
+      const payload = response.json as { error?: { code?: string; message?: string } } | undefined;
+      if (payload?.error?.code !== undefined) code = payload.error.code;
+      if (payload?.error?.message !== undefined) message = payload.error.message;
       throw new ApiError(code, message);
     }
     return response;
   }
 
   async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const text = await (await request(method, path, body)).text();
-    return (text.length === 0 ? undefined : JSON.parse(text)) as T;
+    return (await request(method, path, body)).json as T;
   }
 
   const enc = encodeURIComponent;
@@ -154,8 +183,11 @@ export function createApi(conn: Conn) {
     pendingApprovals: () => call<ApprovalRequest[]>('GET', '/api/approvals'),
     runningThreads: () => call<string[]>('GET', '/api/running'),
     /** 附件需要令牌才能读，取回后转成 blob: 地址给 <img> 用（CSP 允许 blob: 图片） */
-    attachmentUrl: async (id: string): Promise<string> =>
-      URL.createObjectURL(await (await request('GET', `/api/attachments/${enc(id)}`)).blob()),
+    attachmentUrl: async (id: string): Promise<string> => {
+      const { bytes, contentType } = await request('GET', `/api/attachments/${enc(id)}`);
+      const type = contentType ?? '';
+      return URL.createObjectURL(new Blob([bytes === undefined ? new ArrayBuffer(0) : (bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer)], { type }));
+    },
   };
 }
 

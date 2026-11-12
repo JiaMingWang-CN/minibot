@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Bot, KernelEvent, KernelState } from '@minibot/core';
 import { Loader2 } from 'lucide-react';
-import { createApi, connectEvents, type Api, type EventConnection, type PresetWithModels } from './api';
+import { createApi, connectEvents, localTransport, type Api, type EventConnection, type PresetWithModels } from './api';
 import { FrameBar } from './FrameBar';
 import { t } from './i18n';
 import { Splash, prefersReducedMotion } from './splash/Splash';
@@ -37,7 +37,7 @@ export function App() {
     void (async () => {
       try {
         const conn = await window.minibot.connection();
-        const api = createApi(conn);
+        const api = createApi(localTransport(conn));
         events = connectEvents(conn, (event) => {
           for (const listener of listeners.current) listener(event);
         });
