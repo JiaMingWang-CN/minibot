@@ -1,6 +1,7 @@
 package app.minibot.mobile.remote
 
 import java.io.InputStream
+import org.json.JSONArray
 import org.json.JSONObject
 
 fun resourceText(name: String): String {
@@ -10,6 +11,19 @@ fun resourceText(name: String): String {
 }
 
 fun fixture(name: String): JSONObject = JSONObject(resourceText(name))
+
+/**
+ * JSON 结构相等（忽略键顺序，数字按数值比较）。
+ * 不用 JSONObject.similar：编译期解析到 android.jar 里的 org.json，没有这个方法。
+ */
+fun jsonEquals(a: Any?, b: Any?): Boolean = when {
+    a is JSONObject && b is JSONObject ->
+        a.length() == b.length() && a.keys().asSequence().all { b.has(it) && jsonEquals(a.get(it), b.get(it)) }
+    a is JSONArray && b is JSONArray ->
+        a.length() == b.length() && (0 until a.length()).all { jsonEquals(a.get(it), b.get(it)) }
+    a is Number && b is Number -> a.toDouble() == b.toDouble()
+    else -> a == b
+}
 
 /** 两个互相连接的内存承载，帧同步投递 */
 class MemoryCarrier : Carrier {

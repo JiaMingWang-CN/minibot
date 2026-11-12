@@ -117,7 +117,7 @@ class NoiseTest {
         for (i in 0 until phoneMessages.length()) outChannel.send(phoneMessages.getJSONObject(i))
         val fromKotlin = decode(outCarrier.sent, pcSend, pcRecv)
         assertEquals(phoneMessages.length(), fromKotlin.size)
-        for (i in fromKotlin.indices) assertTrue("手机消息 $i", fromKotlin[i].similar(phoneMessages.getJSONObject(i)))
+        for (i in fromKotlin.indices) assertTrue("手机消息 $i", jsonEquals(fromKotlin[i], phoneMessages.getJSONObject(i)))
 
         // 夹具里电脑发的帧，手机能解开（用新的手机侧状态，nonce 从 0 开始）
         val phone2 = Handshake(NoisePattern.KK, true, pairOf(kkKeys.getString("s")), rs = pcPublic, e = pairOf(kkKeys.getString("e")))
@@ -128,7 +128,7 @@ class NoiseTest {
         val got = decode(List(pcFrames.length()) { hexToBytes(pcFrames.getString(it)) }, send2, recv2)
         val pcMessages = channelFixture.getJSONArray("messages")
         assertEquals(pcMessages.length(), got.size)
-        for (i in got.indices) assertTrue("电脑消息 $i", got[i].similar(pcMessages.getJSONObject(i)))
+        for (i in got.indices) assertTrue("电脑消息 $i", jsonEquals(got[i], pcMessages.getJSONObject(i)))
     }
 
     @Test
