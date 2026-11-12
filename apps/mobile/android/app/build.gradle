@@ -10,6 +10,9 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "1.0"
+        // 收集点地址只在构建时注入，源码里没有默认值；空串表示上传与反馈整体关闭
+        def collectUrl = System.getenv('MINIBOT_COLLECT_URL') ?: ''
+        buildConfigField "String", "COLLECT_URL", "\"${collectUrl}\""
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -40,6 +43,9 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
             signingConfig signingConfigs.release
         }
+    }
+    buildFeatures {
+        buildConfig true
     }
     sourceSets {
         // 测试夹具与电脑端共用同一份
@@ -76,6 +82,7 @@ dependencies {
     testImplementation "junit:junit:$junitVersion"
     testImplementation "org.json:json:$orgJsonVersion"
     testImplementation "org.jetbrains.kotlinx:kotlinx-coroutines-test:$kotlinCoroutinesVersion"
+    testImplementation "com.squareup.okhttp3:mockwebserver:$okhttpVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')

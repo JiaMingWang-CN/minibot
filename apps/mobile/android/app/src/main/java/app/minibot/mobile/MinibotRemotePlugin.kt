@@ -6,6 +6,8 @@ import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import androidx.activity.result.ActivityResult
+import app.minibot.mobile.diag.Diag
+import app.minibot.mobile.diag.FeedbackException
 import app.minibot.mobile.remote.PairingCodeException
 import app.minibot.mobile.remote.PairingFailedException
 import app.minibot.mobile.remote.parsePairingCode
@@ -19,6 +21,7 @@ import com.getcapacitor.annotation.Permission
 import com.getcapacitor.annotation.PermissionCallback
 import com.journeyapps.barcodescanner.ScanOptions
 import com.journeyapps.barcodescanner.ScanContract
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
@@ -197,5 +200,78 @@ class MinibotRemotePlugin : Plugin(), HubSink {
         val id = RemoteHub.launchThread
         RemoteHub.launchThread = null
         call.resolve(JSObject().put("threadId", id ?: JSONObject.NULL))
+    }
+
+    // —— 诊断与反馈（本机功能，不经电脑端） ——
+
+    @PluginMethod
+    fun getDiagnostics(call: PluginCall) {
+        call.resolve(
+            JSObject()
+                .put("consent", Diag.settings?.consent ?: "unset")
+                .put("available", Diag.available)
+                .put("appVersion", Diag.appVersion),
+        )
+    }
+
+    @PluginMethod
+    fun setDiagnostics(call: PluginCall) {
+        val consent = call.getString("consent") ?: return call.reject("缺少 consent")
+        if (consent != "on" && consent != "off") return call.reject("consent 必须是 on 或 off")
+        RemoteHub.hubScope.launch(Dispatchers.IO) {
+            Diag.settings?.consent = consent
+            Diag.setConsent(consent)
+            call.resolve()
+        }
+    }
+
+    @PluginMethod
+    fun logsPreview(call: PluginCall) {
+        RemoteHub.hubScope.launch(Dispatchers.IO) {
+            try {
+                call.resolve(JSObject().put("text", Diag.recentLogs()))
+            } catch (e: Exception) {
+                call.reject(e.message ?: "读取日志失败")
+            }
+        }
+    }
+
+    @PluginMethod
+    fun sendFeedback(call: PluginCall) {
+        val description = call.getString("description") ?: return call.reject("缺少问题描述")
+        val contact = call.getString("contact")
+        val attachLogs = call.getBoolean("attachLogs") ?: false
+        val uploader = Diag.uploader ?: return call.reject("反馈功能未开启", "unavailable")
+        RemoteHub.hubScope.launch(Dispatchers.IO) {
+            try {
+                uploader.sendFeedback(description, contact, attachLogs)
+                call.resolve()
+            } catch (e: FeedbackException) {
+                call.reject(feedbackMessage(e.kind), e.kind)
+            } catch (e: IllegalArgumentException) {
+                call.reject(e.message ?: "参数无效", "invalid")
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                call.reject(e.message ?: "发送失败", "error")
+            }
+        }
+    }
+
+    @PluginMethod
+    fun reportClientError(call: PluginCall) {
+        val message = call.getString("message") ?: return call.reject("缺少 message")
+        val stack = call.getString("stack")
+        RemoteHub.hubScope.launch(Dispatchers.IO) {
+            Diag.reportClientError(message, stack)
+            call.resolve()
+        }
+    }
+
+    private fun feedbackMessage(kind: String): String = when (kind) {
+        "network" -> "网络连接失败，请检查网络后重试"
+        "rate_limited" -> "提交太频繁，请稍后再试"
+        "rejected" -> "反馈内容未被接受，请修改后重试"
+        else -> "反馈服务暂不可用，请稍后再试"
     }
 }

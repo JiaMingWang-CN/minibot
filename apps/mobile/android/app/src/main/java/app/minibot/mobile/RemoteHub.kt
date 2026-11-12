@@ -7,6 +7,7 @@ import android.net.Network
 import android.os.Build
 import android.os.PowerManager
 import androidx.core.app.NotificationManagerCompat
+import app.minibot.mobile.diag.Diag
 import app.minibot.mobile.remote.ConnectionState
 import app.minibot.mobile.remote.Connector
 import app.minibot.mobile.remote.KeystorePairingStore
@@ -78,8 +79,15 @@ object RemoteHub {
         if (initialized) return
         initialized = true
         appContext = context.applicationContext
+        Diag.init(appContext)
         prefs = appContext.getSharedPreferences("remote", Context.MODE_PRIVATE)
         store = KeystorePairingStore(appContext)
+        // 中继口令登记为密钥：日志里万一出现也会被替换
+        try {
+            store.load()?.relayToken?.let { Diag.registerSecret(it) }
+        } catch (e: Exception) {
+            // 存储暂时读不出时下次连接再登记
+        }
         poster = AndroidPoster(appContext)
         connector = Connector(scope, store, OkHttpCarrierFactory())
         connector.onMessage = { message ->

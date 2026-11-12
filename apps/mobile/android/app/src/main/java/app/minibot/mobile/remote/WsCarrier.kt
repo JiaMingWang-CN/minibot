@@ -2,6 +2,8 @@ package app.minibot.mobile.remote
 
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import app.minibot.mobile.diag.Diag
+import app.minibot.mobile.diag.LogLevel
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -58,6 +60,7 @@ class WsCarrier(client: OkHttpClient, url: String, private val relayHello: JSONO
         }
 
         override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+            Diag.write(LogLevel.WARN, "remote", "carrier.closing", mapOf("code" to code))
             webSocket.close(code.takeIf { it != 1005 } ?: 1000, null)
             // 1000 / 1005 是对端正常关闭；中继的 44xx 是拒绝（口令错误、被限流等），按网络错误处理
             notifyClosed(if (code == 1000 || code == 1005) CloseReason.Normal else CloseReason.Network("中继关闭连接（$code）"))
@@ -68,6 +71,11 @@ class WsCarrier(client: OkHttpClient, url: String, private val relayHello: JSONO
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+            // 只记异常类型与状态码，不记地址、口令等自由文本
+            Diag.write(
+                LogLevel.WARN, "remote", "carrier.failed",
+                mapOf("error" to t.javaClass.simpleName, "status" to (response?.code ?: 0)),
+            )
             notifyClosed(CloseReason.Network(t.message ?: "网络错误"))
         }
     }

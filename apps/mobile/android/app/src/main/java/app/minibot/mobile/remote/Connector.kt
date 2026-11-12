@@ -1,5 +1,8 @@
 package app.minibot.mobile.remote
 
+import app.minibot.mobile.diag.Diag
+import app.minibot.mobile.diag.DiagEvent
+import app.minibot.mobile.diag.LogLevel
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -136,6 +139,10 @@ class Connector(
                 val outcome = connectOnce(pairing, pairing.lanAddresses, pairing.lanPort, pairing.relayUrl, pairing.relayToken, pairing.routeId, start, pair = false)
                 activeChannel = null
                 if (outcome is Outcome.Revoked) {
+                    Diag.write(
+                        LogLevel.WARN, "remote", "connect.revoked", mapOf("attempt" to attempt),
+                        DiagEvent("error", "remote.connect", mapOf("reason" to "revoked")),
+                    )
                     rejections += 1
                     if (rejections >= REVOKE_AFTER_REJECTIONS) {
                         // 电脑已撤销这台手机：清掉配对，回到配对页，不再重连
@@ -145,6 +152,14 @@ class Connector(
                     }
                 } else {
                     rejections = 0
+                }
+                if (outcome is Outcome.Ended) {
+                    val reason = reasonCategory(outcome.message)
+                    Diag.write(
+                        LogLevel.WARN, "remote", "connect.ended",
+                        mapOf("connected" to outcome.connected, "reason" to reason, "attempt" to attempt),
+                        DiagEvent("error", "remote.connect", mapOf("reason" to reason, "connected" to outcome.connected)),
+                    )
                 }
                 if (outcome is Outcome.Ended && outcome.connected) attempt = 0
                 _state.value = ConnectionState.Connecting
@@ -302,6 +317,7 @@ class Connector(
                         connectedOnce = true
                         activeChannel = link.channel
                         _state.value = ConnectionState.Connected(link.via, pcName)
+                        Diag.write(LogLevel.INFO, "remote", "connect.ok", mapOf("via" to link.via.name.lowercase()))
                     }
                 }
                 Ev.Paired -> if (phase == Phase.PAIRED) return Outcome.Paired
@@ -407,6 +423,7 @@ class Connector(
     suspend fun pair(offer: PairingOffer, deviceName: String) {
         val name = deviceName.trim()
         if (name.isEmpty() || name.length > 40) throw PairingFailedException("设备名需要 1–40 个字符")
+        Diag.write(LogLevel.INFO, "remote", "pair.start", mapOf("lan" to offer.lanAddresses.size, "relay" to (offer.relayUrl != null)))
         stop()
         val identity = try {
             store.identity()
@@ -424,7 +441,13 @@ class Connector(
         if (outcome !is Outcome.Paired) {
             // 原来已配对（例如重新配对失败）就恢复原连接，不能停在未连接
             resumeIfPaired()
-            throw PairingFailedException((outcome as? Outcome.Ended)?.message ?: "电脑拒绝了配对")
+            val message = (outcome as? Outcome.Ended)?.message ?: "电脑拒绝了配对"
+            val reason = reasonCategory(message)
+            Diag.write(
+                LogLevel.WARN, "remote", "pair.failed", mapOf("reason" to reason),
+                DiagEvent("error", "remote.pair", mapOf("reason" to reason)),
+            )
+            throw PairingFailedException(message)
         }
         try {
             savePairing(offer, routeId, identity)
@@ -432,6 +455,7 @@ class Connector(
             resumeIfPaired()
             throw PairingFailedException(e.message ?: "暂时无法保存配对信息")
         }
+        Diag.write(LogLevel.INFO, "remote", "pair.ok")
         start()
     }
 
@@ -454,4 +478,14 @@ class Connector(
         _state.value = ConnectionState.Idle
         start()
     }
+}
+
+/** 断线原因归成固定枚举，避免把自由文本写进事件 */
+private fun reasonCategory(message: String): String = when {
+    message.contains("超时") -> "timeout"
+    message.contains("没有可用") -> "no_route"
+    message.contains("另一条") -> "other_route"
+    message.contains("电脑不在线") -> "pc_offline"
+    message.contains("网络") -> "network"
+    else -> "closed"
 }
