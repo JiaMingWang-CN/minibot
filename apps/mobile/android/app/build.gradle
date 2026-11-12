@@ -1,6 +1,21 @@
 apply plugin: 'com.android.application'
 apply plugin: 'org.jetbrains.kotlin.android'
 
+import groovy.json.JsonSlurper
+
+// 版本号单一来源是根 package.json：versionName = X.Y.Z，versionCode = major*10000 + minor*100 + patch
+def rootVersion = { ->
+    def parsed = new JsonSlurper().parse(file('../../../../package.json'))
+    def match = (parsed.version.toString() =~ /^(\d+)\.(\d+)\.(\d+)$/)
+    if (!match.find()) throw new GradleException("根 package.json 的 version 不是 X.Y.Z：${parsed.version}")
+    return [match.group(1).toInteger(), match.group(2).toInteger(), match.group(3).toInteger()]
+}()
+def versionMajor = rootVersion[0]
+def versionMinor = rootVersion[1]
+def versionPatch = rootVersion[2]
+def computedVersionCode = versionMajor * 10000 + versionMinor * 100 + versionPatch
+println "minibot android versionName=${versionMajor}.${versionMinor}.${versionPatch} versionCode=${computedVersionCode}"
+
 android {
     namespace = "app.minibot.mobile"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -8,8 +23,8 @@ android {
         applicationId "app.minibot.mobile"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode computedVersionCode
+        versionName "${versionMajor}.${versionMinor}.${versionPatch}"
         // 收集点地址只在构建时注入，源码里没有默认值；空串表示上传与反馈整体关闭
         def collectUrl = System.getenv('MINIBOT_COLLECT_URL') ?: ''
         buildConfigField "String", "COLLECT_URL", "\"${collectUrl}\""

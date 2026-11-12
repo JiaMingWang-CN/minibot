@@ -1,0 +1,103 @@
+# 发布流水线：推送 v* 标签触发，构建 Windows 安装包与安卓 APK，发到同一个 GitHub Release。
+#electron-builder 产出的 Release 默认是草稿；两个构建作业都成功后，最后一个作业把它发布。
+# 带 -rc.N 后缀的标签发布为 prerelease（releases/latest 与 electron-updater 默认都忽略 prerelease）。
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # 标签去掉可选的 -rc.N 后缀后必须等于根 package.json 的 version，不符直接失败
+      - name: 校验标签与根版本一致
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="${GITHUB_REF_NAME%-rc.*}"
+          TAG="${TAG#v}"
+          if [ "$TAG" != "$VERSION" ]; then
+            echo "标签 $GITHUB_REF_NAME 与根版本 $VERSION 不一致"
+            exit 1
+          fi
+
+  desktop:
+    needs: verify
+    runs-on: windows-latest
+    env:
+      MINIBOT_COLLECT_URL: ${{ vars.MINIBOT_COLLECT_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: node scripts/sync-version.mjs
+      - run: npm run build
+      - name: 打包并上传到草稿 Release
+        run: npm run pack --workspace @minibot/desktop -- --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  android:
+    needs: verify
+    runs-on: ubuntu-latest
+    env:
+      MINIBOT_COLLECT_URL: ${{ vars.MINIBOT_COLLECT_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: android-actions/setup-android@v3
+      # 签名密钥只写进作业的临时目录，作业结束即销毁，不作为 artifact 上传
+      - name: 还原签名 keystore
+        run: echo "${{ secrets.MINIBOT_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/minibot.jks"
+      - run: npm ci
+      - run: node scripts/sync-version.mjs
+      - run: npm run apk --workspace @minibot/mobile
+        env:
+          MINIBOT_KEYSTORE: ${{ runner.temp }}/minibot.jks
+          MINIBOT_KEYSTORE_PASSWORD: ${{ secrets.MINIBOT_KEYSTORE_PASSWORD }}
+          MINIBOT_KEY_ALIAS: ${{ secrets.MINIBOT_KEY_ALIAS }}
+          MINIBOT_KEY_PASSWORD: ${{ secrets.MINIBOT_KEY_PASSWORD }}
+      - name: 重命名 APK 并生成校验文件
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          cp apps/mobile/android/app/build/outputs/apk/release/app-release.apk "minibot-$VERSION.apk"
+          sha256sum "minibot-$VERSION.apk" | cut -d' ' -f1 > "minibot-$VERSION.apk.sha256"
+      - name: 上传 APK 到草稿 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" ||
+            gh release create "$GITHUB_REF_NAME" --draft --title "minibot $GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY"
+          gh release upload "$GITHUB_REF_NAME" "minibot-$VERSION.apk" "minibot-$VERSION.apk.sha256" --repo "$GITHUB_REPOSITORY"
+
+  publish:
+    needs: [desktop, android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 发布草稿 Release（正文取标签注释）
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BODY=$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME")
+          EXTRA=""
+          case "$GITHUB_REF_NAME" in *-rc.*) EXTRA="--prerelease";; esac
+          gh release edit "$GITHUB_REF_NAME" --draft=false --latest \
+            --title "minibot $GITHUB_REF_NAME" --notes "$BODY" $EXTRA --repo "$GITHUB_REPOSITORY"
