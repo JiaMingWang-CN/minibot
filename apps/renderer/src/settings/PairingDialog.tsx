@@ -12,10 +12,7 @@ import { errorText } from '../ui/settings';
 const CLOSE_DELAY_MS = 1500;
 const QUIET_ZONE = 4;
 
-/**
- * 二维码一律黑码白底：深色模式下反色码很多扫码器认不出来，所以这里固定用最高对比度，
- * 四周留白由白色底板提供。
- */
+/** 二维码用 qr-paper / qr-ink 两个 token（深浅色都是黑码白底），四周留白由底板提供 */
 function QrCode({ text, label }: { text: string; label: string }) {
   const cells = useMemo(() => {
     const qr = qrcode(0, 'L');
@@ -30,9 +27,9 @@ function QrCode({ text, label }: { text: string; label: string }) {
   }, [text]);
   const size = cells.count + QUIET_ZONE * 2;
   return (
-    <svg role="img" aria-label={label} viewBox={`0 0 ${size} ${size}`} shapeRendering="crispEdges" className="size-[260px] rounded-xl bg-white">
+    <svg role="img" aria-label={label} viewBox={`0 0 ${size} ${size}`} shapeRendering="crispEdges" className="size-[260px] rounded-xl bg-qr-paper">
       {cells.dark.map(([x, y]) => (
-        <rect key={`${x}-${y}`} x={x + QUIET_ZONE} y={y + QUIET_ZONE} width="1" height="1" className="fill-black" />
+        <rect key={`${x}-${y}`} x={x + QUIET_ZONE} y={y + QUIET_ZONE} width="1" height="1" className="fill-qr-ink" />
       ))}
     </svg>
   );
@@ -54,7 +51,8 @@ export function PairingDialog({
   onStatus: (status: RemoteStatus) => void;
   onClose: () => void;
 }) {
-  const baseline = useRef(status.devices.length);
+  // 配对成功的判据：有设备的配对时间不早于对话框打开时（同一台手机重新配对时设备数不变）
+  const openedAt = useRef(Date.now());
   const [now, setNow] = useState(() => Date.now());
   const [error, setError] = useState<string | null>(null);
   const [pairedName, setPairedName] = useState<string | null>(null);
@@ -85,9 +83,9 @@ export function PairingDialog({
 
   // 设备数增加：配对成功
   useEffect(() => {
-    if (pairedName !== null || status.devices.length <= baseline.current) return;
-    const newest = [...status.devices].sort((a, b) => b.pairedAt - a.pairedAt)[0]!;
-    setPairedName(newest.name);
+    if (pairedName !== null) return;
+    const paired = status.devices.filter((d) => d.pairedAt >= openedAt.current).sort((a, b) => b.pairedAt - a.pairedAt)[0];
+    if (paired !== undefined) setPairedName(paired.name);
   }, [status.devices, pairedName]);
 
   // 显示“已配对”片刻后自动关闭

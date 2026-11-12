@@ -39,6 +39,10 @@
   --color-warning: #9c5b00;
   --color-danger: #cd2834;
 
+  /* 配对二维码：深浅色模式都是黑码白底（反色码很多扫码器认不出），深色里不覆盖 */
+  --color-qr-paper: #ffffff;
+  --color-qr-ink: #000000;
+
   --font-sans: "Geist Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei",
     system-ui, sans-serif;
   --font-mono: "Geist Mono Variable", "SF Mono", ui-monospace, Menlo, Consolas, "Liberation Mono", monospace;
