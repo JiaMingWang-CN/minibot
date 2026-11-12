@@ -267,6 +267,7 @@ export class Kernel {
         void this.consolidator.consolidateThread(threadId).catch(() => {});
       },
     );
+    for (const bot of await this.bots()) this.diag.addWorkspace(effectiveWorkspace(this.paths, bot));
     const osName = `${this.platform} ${os.release()}`;
     this.diag.write(
       'info',
@@ -532,6 +533,7 @@ export class Kernel {
       memoryEnabled: true,
     };
     const workspace = effectiveWorkspace(this.paths, bot);
+    this.diag.addWorkspace(workspace);
     await fs.mkdir(workspace, { recursive: true });
     await fs.mkdir(this.paths.memoryDir(bot.id), { recursive: true });
     if (i.profile !== undefined && i.profile.length > 0) {
@@ -627,6 +629,7 @@ export class Kernel {
       bot.thinkingLevel = null;
     }
 
+    this.diag.addWorkspace(effectiveWorkspace(this.paths, bot));
     await saveBot(this.paths, bot);
     return bot;
   }

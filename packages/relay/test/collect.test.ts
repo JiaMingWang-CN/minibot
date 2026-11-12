@@ -479,3 +479,21 @@ test('unknown upgrade path', async () => {
     assert.equal(await fetch(`http://127.0.0.1:${relay.port}/collect/v1/unknown`, { method: 'POST' }).then((r) => r.status), 404);
   });
 });
+
+test('events data size: stack 与其余字段分别校验', async () => {
+  await withCollect(async ({ post, clock }) => {
+    const path = '/collect/v1/events';
+    const body = (data: Record<string, unknown>) => eventsBody([{ ts: 1, kind: 'error', name: 'error.x', data }]);
+    // 没有 stack，其余字段序列化 > 4096
+    const many: Record<string, string> = {};
+    for (let i = 0; i < 100; i += 1) many[`k${i}`] = 'v'.repeat(60);
+    assert.ok(JSON.stringify(many).length > 5000);
+    assert.equal(await post(path, body(many)), 400);
+    // 其余字段接近 4096 加上 4096 字的 stack 仍然通过
+    clock.t += 61_000;
+    const near: Record<string, string> = {};
+    for (let i = 0; i < 50; i += 1) near[`k${i}`] = 'v'.repeat(60);
+    assert.ok(JSON.stringify(near).length < 4096);
+    assert.equal(await post(path, body({ ...near, stack: 'a'.repeat(4096) })), 204);
+  });
+});

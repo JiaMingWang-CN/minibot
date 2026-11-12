@@ -197,16 +197,9 @@ export function instrumentCallModel(inner: CallModel, diag: DiagLog): CallModel 
       ...(a.provider.presetId !== undefined ? { presetId: a.provider.presetId } : {}),
       model: a.request.model,
     };
+    let result: AssistantResult;
     try {
-      const result = await inner(a);
-      diag.write('info', 'model', 'model.request', {
-        ...base,
-        ok: true,
-        durationMs: Date.now() - started,
-        inputTokens: result.usage.inputTokens,
-        outputTokens: result.usage.outputTokens,
-      });
-      return result;
+      result = await inner(a);
     } catch (err) {
       const durationMs = Date.now() - started;
       if (err instanceof AbortedError) {
@@ -229,5 +222,19 @@ export function instrumentCallModel(inner: CallModel, diag: DiagLog): CallModel 
       );
       throw err;
     }
+    // 成功日志放在 try 之外：日志本身的任何问题都不能改变调用结果
+    try {
+      const usage = (result as { usage?: { inputTokens?: number; outputTokens?: number } }).usage;
+      diag.write('info', 'model', 'model.request', {
+        ...base,
+        ok: true,
+        durationMs: Date.now() - started,
+        inputTokens: usage?.inputTokens,
+        outputTokens: usage?.outputTokens,
+      });
+    } catch {
+      // 忽略
+    }
+    return result;
   };
 }

@@ -249,7 +249,8 @@ function reportTool(diag: DiagLog, call: Extract<Block, { type: 'tool_use' }>, e
       timedOut: timedOut || undefined,
       ...(typeof input['path'] === 'string' ? { path: input['path'] } : {}),
       ...(typeof input['command'] === 'string' ? { command: input['command'] } : {}),
-      ...(failed ? { error: result.content.slice(0, 500) } : {}),
+      // run_command 的内容含命令输出，不进日志；其他工具的错误文案是固定的
+      ...(failed && call.name !== 'run_command' ? { error: result.content.slice(0, 500) } : {}),
     },
     failed
       ? {

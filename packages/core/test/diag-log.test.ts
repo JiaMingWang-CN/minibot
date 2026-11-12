@@ -7,6 +7,7 @@ import { DiagLog, type DiagEvent } from '../src/diag/log.ts';
 import { SecretSet } from '../src/secrets/redact.ts';
 import { Kernel } from '../src/kernel.ts';
 import { ModelError } from '../src/model/types.ts';
+import { instrumentCallModel } from '../src/model/client.ts';
 import { dataPaths } from '../src/paths.ts';
 import { openDb } from '../src/db/db.ts';
 import { newBot } from '../src/config/config.ts';
@@ -406,4 +407,78 @@ test('remote: 中继口令登记为密钥', async () => {
   const raw = await fs.readFile(path.join(dir, file), 'utf8');
   assert.ok(!raw.includes('relay-secret-token-987654'));
   assert.match(raw, /REDACTED_API_KEY/);
+});
+
+test('run_command 超时：命令输出不进日志', async () => {
+  const { env, dir, workspace, close } = await toolSetup();
+  env.bot.approvalMode = 'auto';
+  await fs.writeFile(path.join(workspace, 'noisy.js'), "console.log('OUTPUT-MARKER-ZXQ'); setTimeout(() => {}, 5000);");
+  const result = await executeTool(toolCall('run_command', { command: 'node noisy.js', timeout_ms: 500 }), env);
+  // 先确认输出确实被捕获，否则下面的断言没有意义
+  assert.match(result.content, /OUTPUT-MARKER-ZXQ/);
+  await close();
+  const raw = await fs.readFile(path.join(dir, fileOf(noon(2026, 11, 12))), 'utf8');
+  assert.ok(!raw.includes('OUTPUT-MARKER-ZXQ'));
+  const row = (await lines(path.join(dir, fileOf(noon(2026, 11, 12)))))[0]!;
+  assert.equal(row['timedOut'], true);
+  assert.equal(row['error'], undefined);
+});
+
+test('callModel 结果缺 usage：调用成功，没有 model.request 错误事件', async () => {
+  const dir = await tmpDir();
+  const diag = new DiagLog({ dir, secrets: new SecretSet(), now: () => noon(2026, 11, 12) });
+  const events: (DiagEvent & { ts: number })[] = [];
+  diag.onEvent((e) => events.push(e));
+  const reply = { blocks: [{ type: 'text', text: '好' }], stopReason: 'end' };
+  const wrapped = instrumentCallModel(async () => reply as never, diag);
+  const result = await wrapped({
+    provider: { id: 'p', name: 'P', format: 'chat_completions', baseUrl: 'http://x' },
+    apiKey: 'k',
+    request: { model: 'm', system: '', messages: [], tools: [], maxTokens: 1, thinkingLevel: null },
+    signal: new AbortController().signal,
+    onDelta: () => {},
+  });
+  assert.equal(result, reply);
+  assert.equal(events.length, 0);
+  await diag.close();
+  const rows = await lines(path.join(dir, fileOf(noon(2026, 11, 12))));
+  assert.equal(rows[0]!['msg'], 'model.request');
+  assert.equal(rows[0]!['ok'], true);
+});
+
+test('stack 键的值不是字符串：丢弃该字段', async () => {
+  const dir = await tmpDir();
+  const log = new DiagLog({ dir, secrets: new SecretSet(), now: () => noon(2026, 11, 12) });
+  const got: (DiagEvent & { ts: number })[] = [];
+  log.onEvent((e) => got.push(e));
+  log.write('error', 'app', 'x', {}, { kind: 'crash', name: 'app.crash', data: { stack: 5 as unknown as string, ok: true } });
+  assert.deepEqual(got[0]!.data, { ok: true });
+  await log.close();
+});
+
+test('bot 工作区登记后，recent() 把它替换成 <workspace>', async () => {
+  const root = await tmpDir();
+  const kernel = await Kernel.open({ dataRoot: root, crypto: fakeCrypto() });
+  const provider = await kernel.addProvider({ name: 'P', format: 'chat_completions', baseUrl: 'http://127.0.0.1:1', apiKey: 'sk-ws-secret-12345' });
+  const workspace = path.join(await fs.realpath(root), 'my-project');
+  await kernel.completeOnboarding({ providerId: provider.id, model: 'm', workspace });
+  kernel.diag.write('info', 'test', 'open ' + workspace + path.sep + 'a.txt');
+  const out = await kernel.diag.recent(0, 100_000);
+  await kernel.close();
+  assert.match(out, /open <workspace>/);
+  assert.ok(!out.includes('my-project'));
+});
+
+test('重新打开内核时，已有 bot 的工作区也会登记', async () => {
+  const root = await tmpDir();
+  const first = await Kernel.open({ dataRoot: root, crypto: fakeCrypto() });
+  const provider = await first.addProvider({ name: 'P', format: 'chat_completions', baseUrl: 'http://127.0.0.1:1', apiKey: 'sk-ws-secret-12345' });
+  const workspace = path.join(await fs.realpath(root), 'reopen-project');
+  await first.completeOnboarding({ providerId: provider.id, model: 'm', workspace });
+  await first.close();
+  const second = await Kernel.open({ dataRoot: root, crypto: fakeCrypto() });
+  second.diag.write('info', 'test', 'open ' + workspace + path.sep + 'b.txt');
+  const out = await second.diag.recent(0, 100_000);
+  await second.close();
+  assert.match(out, /open <workspace>/);
 });

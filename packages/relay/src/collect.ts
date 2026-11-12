@@ -86,8 +86,10 @@ function shortString(value: unknown, max: number): string {
 /** 事件 data：扁平对象，值只能是 string(≤64)/有限 number/boolean/null；唯一例外是 stack（≤4096 字、允许换行） */
 function eventData(value: unknown): string {
   if (!isRecord(value)) throw new Reject(400);
+  const rest: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value)) {
     if (!DATA_KEY.test(key)) throw new Reject(400);
+    if (key !== 'stack') rest[key] = item;
     if (key === 'stack') {
       if (typeof item !== 'string' || item.length > STACK_MAX || DESCRIPTION_CONTROL.test(item)) throw new Reject(400);
     } else if (typeof item === 'string') {
@@ -98,9 +100,9 @@ function eventData(value: unknown): string {
       throw new Reject(400);
     }
   }
-  const json = JSON.stringify(value);
-  if (json.length > EVENT_DATA_MAX + STACK_MAX * 2) throw new Reject(400);
-  return json;
+  // stack 本身 ≤ STACK_MAX 字；去掉 stack 后其余字段序列化 ≤ EVENT_DATA_MAX
+  if (JSON.stringify(rest).length > EVENT_DATA_MAX) throw new Reject(400);
+  return JSON.stringify(value);
 }
 
 function common(body: Record<string, unknown>): Common {

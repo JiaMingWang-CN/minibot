@@ -233,6 +233,10 @@ export class DiagLog {
           this.dropped(event.name, key, 'key');
           continue;
         }
+        if (key === 'stack' && typeof value !== 'string') {
+          this.dropped(event.name, key, 'stack');
+          continue;
+        }
         if (typeof value === 'string') {
           if (key === 'stack') {
             const stack = this.clean(value);

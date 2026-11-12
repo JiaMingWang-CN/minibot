@@ -87,7 +87,7 @@
 **Interfaces:**
 - Produces: `type LogLevel = 'info' | 'warn' | 'error'`
 - Produces: `interface DiagEvent { kind: 'start'|'error'|'crash'|'metric'|'update'; name: string; data: Record<string, string | number | boolean | null> }`
-- Produces: `class DiagLog { constructor(o: { dir: string; secrets: SecretSet; now?: () => number; maxDays?: number; maxBytes?: number }); write(level: LogLevel, area: string, msg: string, fields?: Record<string, unknown>, event?: DiagEvent): void; onEvent(cb: (e: DiagEvent & { ts: number }) => void): () => void; recent(sinceMs: number, maxBytes: number): Promise<string>; close(): Promise<void> }`
+- Produces: `class DiagLog { constructor(o: { dir: string; secrets: SecretSet; now?: () => number; maxDays?: number; maxBytes?: number; pathContext?: () => { home: string; user: string; host: string; workspaces?: string[] } }); addWorkspace(dir: string): void; readonly secrets: SecretSet; write(level: LogLevel, area: string, msg: string, fields?: Record<string, unknown>, event?: DiagEvent): void; onEvent(cb: (e: DiagEvent & { ts: number }) => void): () => void; recent(sinceMs: number, maxBytes: number): Promise<string>; close(): Promise<void> }`
 - Produces: `scrubPaths(text: string, ctx: { home: string; workspaces: string[]; user: string; host: string }): string`
 - Produces: `scrubStack(stack: string, ctx: same): string`
 - Produces: `redactLike(text: string): string`（形态过滤：`sk-…`、`Bearer …`、≥ 32 位的连续随机串 → `[REDACTED]`）
