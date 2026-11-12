@@ -8,9 +8,10 @@ import {
   timingSafeEqual,
   type KeyObject,
 } from 'node:crypto';
-import type { IncomingMessage } from 'node:http';
+import { createServer, type IncomingMessage } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { WebSocketServer, type RawData, type WebSocket } from 'ws';
+import { createCollector, type Collector } from './collect.ts';
 
 // 中继：电脑与手机各自向它建立出站连接，它按 routeId 配对并只转发密文小块，不解析负载。
 //
@@ -63,6 +64,8 @@ export interface RelayOptions {
    * 最右边一项（反代追加的真实客户端地址）限流，否则所有人都是 127.0.0.1。
    */
   trustProxy?: boolean;
+  /** 设置后启用 /collect/v1/* 诊断收集；不设则这些路径一律 404 且不创建任何文件 */
+  collect?: { dbPath: string; maxBytes: number };
 }
 
 export interface RelayHandle {
@@ -113,11 +116,36 @@ export async function startRelay(o: RelayOptions): Promise<RelayHandle> {
   let connections = 0;
 
   // maxPayload 放宽，由我们自己按 MAX_FRAME_BYTES 以 4413 关闭（ws 自带的超限关闭码是 1009）
-  const wss = new WebSocketServer({ host: o.host, port: o.port, path: '/v1', maxPayload: 1024 * 1024 });
-  await new Promise<void>((resolve, reject) => {
-    wss.once('listening', () => resolve());
-    wss.once('error', reject);
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
+  const collector: Collector | null =
+    o.collect === undefined ? null : createCollector({ ...o.collect, now, log });
+  const server = createServer((req, res) => {
+    const path = (req.url ?? '').split('?')[0] ?? '';
+    if (collector !== null && path.startsWith('/collect/v1/')) {
+      // handle 内部已兜住所有异常；这里再兜一层，收集路径出错绝不外溢
+      collector.handle(req, res, clientIp(req, o.trustProxy === true)).catch((err: unknown) => {
+        log(`收集错误：${err instanceof Error ? err.message : 'unknown'}`);
+        if (!res.headersSent) res.writeHead(500).end();
+      });
+      return;
+    }
+    res.writeHead(404).end();
   });
+  server.on('upgrade', (req, socket, head) => {
+    const path = (req.url ?? '').split('?')[0];
+    if (path === '/v1') {
+      wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+      return;
+    }
+    socket.on('error', () => {});
+    socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once('listening', () => resolve());
+    server.once('error', reject);
+    server.listen(o.port, o.host);
+  });
+  server.on('error', (err) => log(`中继错误：${err.message}`));
   wss.on('error', (err) => log(`中继错误：${err.message}`));
 
   // 向对端转发；对端读得太慢、积压超限就关掉它（电脑重连、手机重新进入都会恢复）
@@ -328,12 +356,17 @@ export async function startRelay(o: RelayOptions): Promise<RelayHandle> {
   heartbeat.unref();
 
   return {
-    port: (wss.address() as AddressInfo).port,
+    port: (server.address() as AddressInfo).port,
     trackedIps: () => ipHits.size,
     close: async () => {
       clearInterval(heartbeat);
       for (const ws of wss.clients) ws.terminate();
       await new Promise<void>((resolve) => wss.close(() => resolve()));
+      collector?.close();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+        server.closeAllConnections();
+      });
     },
   };
 }

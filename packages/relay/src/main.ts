@@ -14,8 +14,15 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) {
 }
 
 const trustProxy = process.env['RELAY_TRUST_PROXY'] === '1';
-const relay = await startRelay({ host, port, token, trustProxy, log: (message) => console.log(message) });
-console.log(`minibot 中继已启动：${host}:${relay.port}`);
+const collectDb = process.env['RELAY_COLLECT_DB'] ?? '';
+const collectMb = Number(process.env['RELAY_COLLECT_MAX_MB'] ?? '2048');
+if (collectDb !== '' && (!Number.isFinite(collectMb) || collectMb <= 0)) {
+  console.error('RELAY_COLLECT_MAX_MB 必须是正数');
+  process.exit(1);
+}
+const collect = collectDb === '' ? undefined : { dbPath: collectDb, maxBytes: Math.floor(collectMb * 1024 * 1024) };
+const relay = await startRelay({ host, port, token, trustProxy, ...(collect === undefined ? {} : { collect }), log: (message) => console.log(message) });
+console.log(`minibot 中继已启动：${host}:${relay.port}${collect === undefined ? '' : '（诊断收集已开启）'}`);
 
 const shutdown = (): void => {
   void relay.close().then(() => process.exit(0));

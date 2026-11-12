@@ -72,10 +72,10 @@
 - `ws unaffected`：collector 内部抛错（注入坏 dbPath 于请求期间）时，已建立的 pc/phone 转发仍收发正常。
 - `unknown upgrade path`：对 `/other` 发起 WebSocket 升级 → 连接被拒。
 
-- [ ] **Step 1:** Write the tests in **验收**; run `node --test packages/relay/test/collect.test.ts` — expect FAIL.
-- [ ] **Step 2:** Implement per **思路** and **约束**.
-- [ ] **Step 3:** Run `npm test` — expect PASS（含现有中继测试）。
-- [ ] **Step 4:** Commit.
+- [x] **Step 1:** Write the tests in **验收**; run `node --test packages/relay/test/collect.test.ts` — expect FAIL.
+- [x] **Step 2:** Implement per **思路** and **约束**.
+- [x] **Step 3:** Run `npm test` — expect PASS（含现有中继测试）。
+- [x] **Step 4:** Commit.
 
 ### Task 2: 内核日志与脱敏
 
