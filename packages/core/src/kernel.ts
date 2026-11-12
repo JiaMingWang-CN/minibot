@@ -69,7 +69,8 @@ import { SecretSet } from './secrets/redact.ts';
 import { SecretStore, type KeyCrypto } from './secrets/store.ts';
 import { ReadTracker } from './tools/read-tracker.ts';
 import type { ToolEnv } from './tools/registry.ts';
-import { callModel as defaultCallModel, testConnection, type CallModel } from './model/client.ts';
+import { callModel as defaultCallModel, instrumentCallModel, testConnection, type CallModel } from './model/client.ts';
+import { DiagLog } from './diag/log.ts';
 import type { Block, ImageMediaType, StoredMessage } from './model/types.ts';
 
 export const MAX_IMAGES_PER_MESSAGE = 4;
@@ -127,6 +128,8 @@ export interface OpenOptions {
   home?: string;
   /** 模型调用自动重试的等待时间，测试用 */
   retryDelaysMs?: number[];
+  /** 应用版本号，写进 app.start 事件（桌面端传 app.getVersion()） */
+  appVersion?: string;
 }
 
 export interface OnboardingInput {
@@ -147,6 +150,14 @@ export interface AddProviderInput {
   apiKeyEnv?: string;
   presetId?: string;
   models?: CustomModel[];
+}
+
+function currentUser(): string {
+  try {
+    return os.userInfo().username;
+  } catch {
+    return '';
+  }
 }
 
 function checkedModels(raw: unknown): CustomModel[] {
@@ -177,6 +188,9 @@ export class Kernel {
   private prepareContext!: TurnDeps['prepareContext'];
   private closed = false;
   private retryDelaysMs: number[] | undefined;
+  private appVersion: string | undefined;
+  /** 本地日志与诊断事件 */
+  diag!: DiagLog;
   /** 正在执行一轮对话的线程；此时新消息作为插话 */
   private activeTurns = new Set<string>();
   /** 线程运行中收到、还没插入的插话 */
@@ -195,6 +209,7 @@ export class Kernel {
     this.platform = o.platform ?? process.platform;
     this.callModel = o.callModel ?? defaultCallModel;
     this.retryDelaysMs = o.retryDelaysMs;
+    this.appVersion = o.appVersion;
   }
 
   private async init(): Promise<void> {
@@ -206,6 +221,12 @@ export class Kernel {
     } catch {
       // 主目录不存在时保持原值
     }
+    this.diag = new DiagLog({
+      dir: this.paths.logsDir,
+      secrets: this.secretSet,
+      pathContext: () => ({ home: this.home, user: currentUser(), host: os.hostname() }),
+    });
+    this.callModel = instrumentCallModel(this.callModel, this.diag);
     this.secretStore = new SecretStore(this.paths.secrets, this.crypto, this.secretSet, {
       platform: this.platform,
     });
@@ -244,6 +265,18 @@ export class Kernel {
       },
       (threadId) => {
         void this.consolidator.consolidateThread(threadId).catch(() => {});
+      },
+    );
+    const osName = `${this.platform} ${os.release()}`;
+    this.diag.write(
+      'info',
+      'app',
+      'app.start',
+      { ...(this.appVersion !== undefined ? { appVersion: this.appVersion } : {}), os: osName },
+      {
+        kind: 'start',
+        name: 'app.start',
+        data: { ...(this.appVersion !== undefined ? { appVersion: this.appVersion } : {}), os: osName },
       },
     );
   }
@@ -875,6 +908,7 @@ export class Kernel {
           (await this.loadBotOrThrow(bot.id)).allowedCommands.includes(command),
         ),
       onAllowlisted: (request) => logAllowlisted(this.db, request),
+      diag: this.diag,
     };
   }
 
@@ -1076,5 +1110,6 @@ export class Kernel {
     // 整理在数据库关闭后还可能写记忆文件：先中止并等它结束
     await this.consolidator.stop();
     this.db.close();
+    await this.diag.close();
   }
 }

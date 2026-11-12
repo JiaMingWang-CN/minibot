@@ -1,6 +1,8 @@
 export { defaultDataRoot, dataPaths, type DataPaths } from './paths.ts';
 export { atomicWriteFile, type AtomicDeps } from './fs/atomic-write.ts';
 export { SecretSet, REDACTED } from './secrets/redact.ts';
+export { DiagLog, type DiagEvent, type TimedDiagEvent, type LogLevel, type DiagLogOptions } from './diag/log.ts';
+export { scrubPaths, scrubStack, redactLike, type PathContext } from './diag/scrub.ts';
 export {
   SecretStore,
   SecretPersistError,

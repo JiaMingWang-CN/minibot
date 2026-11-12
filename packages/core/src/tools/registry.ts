@@ -14,6 +14,7 @@ import { readFile, writeFile, editFile } from './files.ts';
 import { globFiles, grepFiles } from './search.ts';
 import { runCommand } from './run-command.ts';
 import type { ToolOutput } from './types.ts';
+import type { DiagLog } from '../diag/log.ts';
 
 export const TOOL_SPECS: ToolSpec[] = [
   {
@@ -112,6 +113,8 @@ export interface ToolEnv {
   isCommandAllowed?: (command: string) => Promise<boolean>;
   /** 命中“总是允许”名单而跳过审批时调用，用于决策日志 */
   onAllowlisted?: (request: ApprovalRequestInput) => void;
+  /** 本地日志与诊断事件；不给则不记录 */
+  diag?: DiagLog;
 }
 
 async function realOrSelf(p: string): Promise<string> {
@@ -212,6 +215,53 @@ function previewOf(name: string, input: Record<string, unknown>, redact: (text: 
 }
 
 export async function executeTool(
+  call: Extract<Block, { type: 'tool_use' }>,
+  env: ToolEnv,
+): Promise<ToolResultBlock> {
+  const started = Date.now();
+  const result = await runTool(call, env);
+  if (env.diag !== undefined) reportTool(env.diag, call, env, result, Date.now() - started);
+  return result;
+}
+
+const KNOWN_TOOLS = new Set(TOOL_SPECS.map((t) => t.name));
+
+/** 完整日志写命令原文与路径；事件只带工具名、类别与退出码，且只在真正出错或超时时发出 */
+function reportTool(diag: DiagLog, call: Extract<Block, { type: 'tool_use' }>, env: ToolEnv, result: ToolResultBlock, durationMs: number): void {
+  diag.addWorkspace(env.workspace);
+  const input = isRecord(call.input) ? call.input : {};
+  const exit = call.name === 'run_command' ? /^退出码: (-?\d+)/.exec(result.content) : null;
+  const exitCode = exit === null ? undefined : Number(exit[1]);
+  const timedOut = call.name === 'run_command' && /^超时: 是/m.test(result.content);
+  // 参数错误与未知工具是模型的问题，不算应用故障
+  const modelMistake = result.status === 'error' && /^(参数错误|未知工具)/.test(result.content);
+  const failed = (result.status === 'error' && !modelMistake) || timedOut;
+  const name = KNOWN_TOOLS.has(call.name) ? call.name : 'unknown';
+  diag.write(
+    failed ? 'error' : 'info',
+    'tool',
+    'tool.call',
+    {
+      tool: name,
+      status: result.status,
+      durationMs,
+      exitCode,
+      timedOut: timedOut || undefined,
+      ...(typeof input['path'] === 'string' ? { path: input['path'] } : {}),
+      ...(typeof input['command'] === 'string' ? { command: input['command'] } : {}),
+      ...(failed ? { error: result.content.slice(0, 500) } : {}),
+    },
+    failed
+      ? {
+          kind: 'error',
+          name: `tool.${name}`,
+          data: { category: timedOut ? 'timeout' : 'error', ...(exitCode !== undefined ? { exitCode } : {}) },
+        }
+      : undefined,
+  );
+}
+
+async function runTool(
   call: Extract<Block, { type: 'tool_use' }>,
   env: ToolEnv,
 ): Promise<ToolResultBlock> {

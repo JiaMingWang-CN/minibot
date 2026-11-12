@@ -3,6 +3,7 @@ import { WebSocket, type RawData } from 'ws';
 import type { Carrier } from './channel.ts';
 import { x25519, type KeyPair } from './noise.ts';
 import { deviceIdOf } from './store.ts';
+import type { DiagLog } from '../diag/log.ts';
 
 // 电脑端到中继的出站连接：收到 session_open 就为该手机会话造一个 Carrier 交给网关。
 
@@ -18,6 +19,8 @@ export interface RelayLinkOptions {
   initialBackoffMs?: number;
   /** 测试用，默认 25000：隔这么久发一次 ping，下一轮还没收到 pong 就断开重连 */
   pingIntervalMs?: number;
+  /** 连接、断线与握手失败写进本地日志；绝不记录地址与口令 */
+  diag?: DiagLog;
 }
 
 const MAX_BACKOFF_MS = 60_000;
@@ -84,6 +87,8 @@ export class RelayLink {
   /** 上一次断开是被顶替：重连成功后不重置退避，避免两份同身份实例每秒互踢 */
   private replaced = false;
   private readonly routeId: string;
+  /** 自上次连上以来是否已经上报过失败事件，避免每次退避重连都发一条 */
+  private reported = false;
 
   constructor(o: RelayLinkOptions) {
     this.o = o;
@@ -130,12 +135,14 @@ export class RelayLink {
     try {
       ws = new WebSocket(this.o.url, { maxPayload: 1024 * 1024 });
     } catch {
+      this.o.diag?.write('error', 'remote', 'relay.badurl', {}, { kind: 'error', name: 'remote.connect', data: { errorCode: 'bad_url' } });
       this.o.onState('error', '中继地址无效');
       this.stopped = true;
       return;
     }
     this.ws = ws;
     let failure: string | null = null;
+    let errorCode: string | undefined;
     // 电脑睡眠、换网络后连接可能半开：本地一直是 OPEN 却再也收不到东西，靠心跳发现并重连
     let alive = true;
     ws.on('pong', () => {
@@ -192,6 +199,8 @@ export class RelayLink {
       } else if (message['type'] === 'welcome') {
         if (!this.replaced) this.backoff = this.o.initialBackoffMs ?? 1000;
         this.replaced = false;
+        this.reported = false;
+        this.o.diag?.write('info', 'remote', 'relay.connected');
         this.o.onState('connected', null);
       } else if (message['type'] === 'session_open' && typeof message['sessionId'] === 'string') {
         const sessionId = message['sessionId'];
@@ -217,6 +226,7 @@ export class RelayLink {
     });
 
     ws.on('error', (err: Error) => {
+      errorCode = (err as NodeJS.ErrnoException).code;
       failure = describeError(err);
     });
 
@@ -225,6 +235,7 @@ export class RelayLink {
       this.stopHeartbeat();
       this.ws = null;
       this.dropSessions();
+      this.reportClose(code, errorCode);
       if (code === 4401) {
         this.stopped = true;
         this.o.onState('error', '中继口令错误');
@@ -244,6 +255,15 @@ export class RelayLink {
       this.o.onState('error', failure ?? '与中继的连接已断开');
       this.scheduleReconnect();
     });
+  }
+
+  private reportClose(code: number, errorCode: string | undefined): void {
+    const diag = this.o.diag;
+    if (diag === undefined) return;
+    const data = { code, ...(errorCode !== undefined ? { errorCode } : {}) };
+    const first = !this.reported;
+    this.reported = true;
+    diag.write('warn', 'remote', 'relay.disconnected', data, first ? { kind: 'error', name: 'remote.connect', data } : undefined);
   }
 
   private scheduleReconnect(): void {

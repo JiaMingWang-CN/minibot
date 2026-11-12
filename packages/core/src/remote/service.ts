@@ -43,6 +43,7 @@ function lanAddresses(): string[] {
 export class RemoteService {
   private readonly store: RemoteStore;
   private readonly gateway: RemoteGateway;
+  private readonly kernel: Kernel;
   private readonly relayBackoffMs: number | undefined;
   private readonly listeners = new Set<() => void>();
   private link: RelayLink | null = null;
@@ -57,8 +58,9 @@ export class RemoteService {
   private queue: Promise<void> = Promise.resolve();
   private closed = false;
 
-  private constructor(store: RemoteStore, gateway: RemoteGateway, relayBackoffMs: number | undefined) {
+  private constructor(store: RemoteStore, gateway: RemoteGateway, kernel: Kernel, relayBackoffMs: number | undefined) {
     this.store = store;
+    this.kernel = kernel;
     this.gateway = gateway;
     this.relayBackoffMs = relayBackoffMs;
   }
@@ -70,7 +72,10 @@ export class RemoteService {
       ...(o.platform !== undefined ? { platform: o.platform } : {}),
     });
     const gateway = new RemoteGateway(kernel, store, { lanAddresses });
-    const service = new RemoteService(store, gateway, o.relayBackoffMs);
+    // 中继口令也登记为密钥：之后任何日志与事件里出现它都会被替换
+    const token = store.relayToken();
+    if (token !== null) kernel.diag.secrets.add(token);
+    const service = new RemoteService(store, gateway, kernel, o.relayBackoffMs);
     gateway.on(() => {
       service.emit();
       void service.reconcile(false);
@@ -100,6 +105,8 @@ export class RemoteService {
 
   async updateConfig(patch: ConfigPatch): Promise<RemoteStatus> {
     await this.store.updateConfig(patch);
+    const token = this.store.relayToken();
+    if (token !== null) this.kernel.diag.secrets.add(token);
     await this.reconcile(true);
     this.emit();
     return this.status();
@@ -174,6 +181,7 @@ export class RemoteService {
           identity: this.store.identity(),
           accept: this.accept('relay'),
           onState: (state, error) => this.setRelay(state, error),
+          diag: this.kernel.diag,
           ...(this.relayBackoffMs !== undefined ? { initialBackoffMs: this.relayBackoffMs } : {}),
         });
         this.link.start();

@@ -117,10 +117,10 @@
 - `unwritable dir`：日志目录是一个文件 → `write` 不抛错。
 - `model failure instrumented`：用 kernel-harness 让模型返回 500 → 日志含 `area:"model"` 的 error 行，`onEvent` 收到 `error/model.request` 且 data 只有白名单字段。
 
-- [ ] **Step 1:** Write the tests in **验收**; run `node --test packages/core/test/diag-log.test.ts packages/core/test/diag-scrub.test.ts` — expect FAIL.
-- [ ] **Step 2:** Implement per **思路** and **约束**.
-- [ ] **Step 3:** Run `npm test` — expect PASS.
-- [ ] **Step 4:** Commit.
+- [x] **Step 1:** Write the tests in **验收**; run `node --test packages/core/test/diag-log.test.ts packages/core/test/diag-scrub.test.ts` — expect FAIL.
+- [x] **Step 2:** Implement per **思路** and **约束**.
+- [x] **Step 3:** Run `npm test` — expect PASS.
+- [x] **Step 4:** Commit.
 
 ### Task 3: 内核事件队列、上传、同意状态与反馈 API
 

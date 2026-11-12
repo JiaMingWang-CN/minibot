@@ -9,6 +9,7 @@ import { responsesAdapter } from './responses.ts';
 import { anthropicAdapter } from './anthropic.ts';
 import type { Adapter, ModelRequest } from './adapter.ts';
 import { SecretSet } from '../secrets/redact.ts';
+import type { DiagLog } from '../diag/log.ts';
 
 export function adapterFor(f: ApiFormat): Adapter {
   if (f === 'chat_completions') return chatCompletionsAdapter;
@@ -182,4 +183,51 @@ export async function testConnection(
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * 给模型调用加诊断：成功记一行 info；失败记完整错误行，并发出只含状态码与错误类别的事件。
+ * 日志与事件里都不含消息正文、人设、记忆；服务只报 presetId / format，不报 baseUrl。
+ */
+export function instrumentCallModel(inner: CallModel, diag: DiagLog): CallModel {
+  return async (a) => {
+    const started = Date.now();
+    const base = {
+      format: a.provider.format,
+      ...(a.provider.presetId !== undefined ? { presetId: a.provider.presetId } : {}),
+      model: a.request.model,
+    };
+    try {
+      const result = await inner(a);
+      diag.write('info', 'model', 'model.request', {
+        ...base,
+        ok: true,
+        durationMs: Date.now() - started,
+        inputTokens: result.usage.inputTokens,
+        outputTokens: result.usage.outputTokens,
+      });
+      return result;
+    } catch (err) {
+      const durationMs = Date.now() - started;
+      if (err instanceof AbortedError) {
+        diag.write('info', 'model', 'model.aborted', { ...base, durationMs });
+        throw err;
+      }
+      const modelError = err instanceof ModelError ? err : null;
+      const status = modelError?.status;
+      const errorKind = modelError?.kind ?? 'unknown';
+      diag.write(
+        'error',
+        'model',
+        'model.request failed',
+        { ...base, ok: false, durationMs, status, errorKind, error: err instanceof Error ? err.message : String(err) },
+        {
+          kind: 'error',
+          name: 'model.request',
+          data: { ...base, errorKind, ...(status !== undefined ? { status } : {}) },
+        },
+      );
+      throw err;
+    }
+  };
 }

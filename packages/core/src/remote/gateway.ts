@@ -165,7 +165,13 @@ export class RemoteGateway {
       this.startSession(channel, newDeviceId, via, pairedName);
     };
 
-    const fail = (): void => {
+    const diag = this.kernel.diag;
+    const fail = (reason: string): void => {
+      if (mode === 'pair') {
+        diag.write('warn', 'remote', 'pair.failed', { via, reason }, { kind: 'error', name: 'remote.pair', data: { via, reason } });
+      } else {
+        diag.write('warn', 'remote', 'handshake.failed', { via, reason });
+      }
       if (mode === 'pair' && offer !== null) {
         offer.failures += 1;
         if (offer.failures >= MAX_PAIRING_FAILURES && this.offer === offer) this.notify();
@@ -181,6 +187,7 @@ export class RemoteGateway {
           if (kind === FRAME_PAIR) {
             offer = this.validOffer();
             if (offer === null) {
+              diag.write('warn', 'remote', 'pair.failed', { via, reason: 'no_offer' }, { kind: 'error', name: 'remote.pair', data: { via, reason: 'no_offer' } });
               carrier.close();
               return;
             }
@@ -204,6 +211,7 @@ export class RemoteGateway {
             const id = frame.subarray(1, 1 + DEVICE_ID_BYTES).toString('hex');
             const device = this.store.findDevice(id);
             if (device === null) {
+              diag.write('info', 'remote', 'handshake.rejected', { via, reason: 'unknown_device' });
               carrier.close();
               return;
             }
@@ -243,17 +251,19 @@ export class RemoteGateway {
         void this.store
           .addDevice(deviceName, remote)
           .then(() => {
+            diag.write('info', 'remote', 'pair.ok', { via });
             if (!carrierClosed) finish(device, deviceIdOf(remote), deviceName);
             // 手机已经断开：设备已保存、邀请已作废，仍要让界面知道
             else this.notify();
           })
           .catch(() => {
+            diag.write('error', 'remote', 'pair.failed', { via, reason: 'store' }, { kind: 'error', name: 'remote.pair', data: { via, reason: 'store' } });
             this.notify();
             carrier.close();
           });
         finished = true;
       } catch {
-        fail();
+        fail('handshake');
       }
     });
   }
