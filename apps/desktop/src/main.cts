@@ -1,4 +1,5 @@
 const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, shell, Tray } = require('electron') as typeof import('electron');
+const fs = require('node:fs') as typeof import('node:fs');
 const path = require('node:path') as typeof import('node:path');
 const { URL } = require('node:url') as typeof import('node:url');
 
@@ -6,6 +7,26 @@ const core = require('@minibot/core') as typeof import('@minibot/core');
 const { Kernel, RemoteService, defaultDataRoot, startServer } = core;
 const cryptoModule = require('./crypto.cjs') as {
   electronCrypto: () => import('@minibot/core').KeyCrypto;
+};
+interface UpdateState {
+  phase: 'idle' | 'checking' | 'none' | 'downloading' | 'ready' | 'error';
+  version?: string;
+  percent?: number;
+  error?: string;
+  checkedAt?: number;
+}
+
+const updaterModule = require('./updater.cjs') as {
+  createUpdater: (deps: {
+    diag: import('@minibot/core').DiagLog;
+    hasRunningReplies: () => boolean;
+    onState: (state: UpdateState) => void;
+  }) => {
+    state: () => UpdateState;
+    check: () => Promise<UpdateState>;
+    install: () => Promise<void>;
+    stop: () => void;
+  };
 };
 
 // 标题栏覆盖层的颜色由页面按主题 token 传入；页面加载前先用与主题背景一致的初始色，避免闪白或闪黑。
@@ -23,16 +44,76 @@ const staticDir = path.join(__dirname, 'static');
 
 let kernel: Awaited<ReturnType<typeof Kernel.open>> | undefined;
 let remote: Awaited<ReturnType<typeof RemoteService.start>> | undefined;
+let updater: ReturnType<typeof updaterModule.createUpdater> | undefined;
 let tray: InstanceType<typeof Tray> | undefined;
 let backgroundNoticeShown = false;
 let server: ServerHandle | undefined;
 let mainWindow: InstanceType<typeof BrowserWindow> | undefined;
 let quitting = false;
 
+/** 收集点地址只在构建时写入 dist/build-info.json；缺文件或空串表示关闭 */
+function collectUrl(): string | null {
+  try {
+    const raw = fs.readFileSync(path.join(__dirname, 'build-info.json'), 'utf8');
+    const info = JSON.parse(raw) as { collectUrl?: unknown };
+    const url = typeof info.collectUrl === 'string' ? info.collectUrl.trim() : '';
+    return url.length > 0 ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 崩溃与未捕获异常：写进本地日志并产生 crash 事件（事件只带脱敏堆栈与类别） */
+function reportCrash(level: 'warn' | 'error', name: string, err: unknown, fields: Record<string, unknown> = {}): void {
+  const error = err instanceof Error ? err : undefined;
+  const message = error?.message ?? String(err);
+  console.error(name, err);
+  if (kernel === undefined) return;
+  try {
+    const stack = error?.stack !== undefined ? kernel.diag.scrubStack(error.stack) : undefined;
+    kernel.diag.write(
+      level,
+      'app',
+      name,
+      { ...fields, message, ...(stack !== undefined ? { stack } : {}) },
+      {
+        kind: 'crash',
+        name: `crash/${name.split('.').pop() ?? name}`,
+        data: { source: 'main', ...(stack !== undefined ? { stack } : {}) },
+      },
+    );
+  } catch {
+    // 日志失败不能影响崩溃处理
+  }
+}
+
+function onUncaught(err: unknown): void {
+  reportCrash('error', 'app.uncaught_exception', err);
+  // 记完交回 Node 的默认行为（打印并退出），不把崩溃吞掉
+  process.removeListener('uncaughtException', onUncaught);
+  throw err;
+}
+
+process.on('uncaughtException', onUncaught);
+process.on('unhandledRejection', (reason) => {
+  reportCrash('error', 'app.unhandled_rejection', reason);
+});
+app.on('render-process-gone', (_event, _contents, details) => {
+  reportCrash('error', 'app.render_process_gone', details.reason, { reason: details.reason });
+});
+app.on('child-process-gone', (_event, details) => {
+  reportCrash('error', 'app.child_process_gone', details.reason, { reason: details.reason, type: details.type });
+});
+
 async function bootstrap(): Promise<void> {
   const dataRoot = process.env['MINIBOT_HOME'] ?? defaultDataRoot();
   const crypto = cryptoModule.electronCrypto();
-  kernel = await Kernel.open({ dataRoot, crypto });
+  kernel = await Kernel.open({
+    dataRoot,
+    crypto,
+    appVersion: app.getVersion(),
+    collectUrl: collectUrl(),
+  });
   // 手机功能的任何问题（没有密钥库、端口被占用…）只体现在“手机”设置页，不影响内核与本机界面
   try {
     remote = await RemoteService.start(kernel, { dataRoot, crypto });
@@ -61,6 +142,27 @@ async function bootstrap(): Promise<void> {
   ipcMain.handle('minibot:connection', (event) => {
     assertTrusted(event);
     return { port: server!.port, token: server!.token };
+  });
+
+  // 应用内更新：状态推给渲染端，检查与重启走 IPC（同样只接受主窗口）
+  updater = updaterModule.createUpdater({
+    diag: kernel.diag,
+    hasRunningReplies: () => kernel !== undefined && kernel.runningThreads().length > 0,
+    onState: (state) => {
+      if (mainWindow !== undefined) mainWindow.webContents.send('minibot:update-state', state);
+    },
+  });
+  ipcMain.handle('minibot:update-state', (event) => {
+    assertTrusted(event);
+    return updater?.state() ?? { phase: 'idle' };
+  });
+  ipcMain.handle('minibot:update-check', async (event) => {
+    assertTrusted(event);
+    return (await updater?.check()) ?? { phase: 'idle' };
+  });
+  ipcMain.handle('minibot:update-install', async (event) => {
+    assertTrusted(event);
+    await updater?.install();
   });
 
   // 只按 botId 打开该 bot 的记忆目录，不接受任意路径（openPath 打开可执行文件会直接运行它）
@@ -136,8 +238,13 @@ async function bootstrap(): Promise<void> {
       }).show();
     }
   });
+  const win = mainWindow;
   mainWindow.on('closed', () => {
     mainWindow = undefined;
+  });
+  // 页面每次加载完都推送一次更新状态，重连后提示条不会丢
+  win.webContents.on('did-finish-load', () => {
+    if (updater !== undefined) win.webContents.send('minibot:update-state', updater.state());
   });
   createTray();
   await mainWindow.loadURL(`${server.origin}/`);
@@ -203,6 +310,12 @@ app.on('before-quit', (event) => {
       await server?.close();
     } catch {
       // 关闭失败不阻止退出
+    }
+    try {
+      updater?.stop();
+      updater = undefined;
+    } catch {
+      // 同上
     }
     try {
       await kernel?.close();

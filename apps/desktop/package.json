@@ -5,13 +5,14 @@
   "type": "module",
   "main": "dist/main.cjs",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node ../../scripts/write-build-info.mjs",
     "start": "electron .",
-    "pack": "electron-builder --win nsis --x64",
+    "pack": "electron-builder --win nsis --x64 --publish never",
     "pack:dir": "electron-builder --win dir --x64"
   },
   "dependencies": {
-    "@minibot/core": "*"
+    "@minibot/core": "*",
+    "electron-updater": "6.8.11"
   },
   "devDependencies": {
     "electron-builder": "26.18.0",

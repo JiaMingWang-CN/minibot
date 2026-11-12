@@ -6,6 +6,7 @@ import { t } from '../i18n';
 import { Toast } from '../ui/Toast';
 import { BUTTON, SETTINGS_CARD, SettingRow, SettingsGroup, SettingsRows, Switch, errorText } from '../ui/settings';
 import { cn } from '../lib/cn';
+import { checkForUpdate, useUpdateState } from '../lib/updates';
 import { DiagnosticsDetails } from './DiagnosticsNotice';
 import { FeedbackDialog } from './FeedbackDialog';
 
@@ -18,6 +19,9 @@ export function AboutPage({ api }: { api: Api }) {
   const [details, setDetails] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [toast, setToast] = useState<{ key: number; text: string } | null>(null);
+  const update = useUpdateState();
+  const [devNotice, setDevNotice] = useState(false);
+  const [checking, setChecking] = useState(false);
 
   useEffect(() => {
     api.diagnostics().then(setInfo, (err: unknown) => setError(errorText(err)));
@@ -37,6 +41,29 @@ export function AboutPage({ api }: { api: Api }) {
         setBusy(false);
       },
     );
+  };
+
+  const runCheck = async (): Promise<void> => {
+    setDevNotice(false);
+    setChecking(true);
+    try {
+      const result = await checkForUpdate();
+      if (result.phase === 'idle') setDevNotice(true);
+    } catch {
+      // 失败状态由主进程推送
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const updateMessage = (): string | undefined => {
+    if (devNotice) return t('about.updateDev');
+    if (update.phase === 'checking') return t('about.updateChecking');
+    if (update.phase === 'none') return t('about.updateNone');
+    if (update.phase === 'downloading') return t('about.updateDownloading', { percent: update.percent ?? 0 });
+    if (update.phase === 'ready') return t('about.updateReady', { version: update.version ?? '' });
+    if (update.phase === 'error') return t('about.updateError');
+    return undefined;
   };
 
   if (info === null) {
@@ -72,6 +99,11 @@ export function AboutPage({ api }: { api: Api }) {
               </button>
             </SettingRow>
           )}
+          <SettingRow title={t('about.update')} subtitle={t('about.updateHint')} message={updateMessage()}>
+            <button type="button" className={BUTTON} disabled={checking} onClick={() => void runCheck()}>
+              {t('about.update')}
+            </button>
+          </SettingRow>
         </SettingsRows>
         {details && info.available && (
           <div className={cn(SETTINGS_CARD, 'mx-4 mb-3 p-3')}>

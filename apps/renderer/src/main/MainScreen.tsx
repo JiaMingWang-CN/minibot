@@ -18,6 +18,7 @@ import { Composer } from './Composer';
 import { ChatHeader } from './ChatHeader';
 import { CommandAllowlistDialog } from './CommandAllowlistDialog';
 import { BotPanel } from '../panel/BotPanel';
+import { installUpdate, useUpdateState } from '../lib/updates';
 import { DiagnosticsNotice } from '../settings/DiagnosticsNotice';
 import { SettingsDialog, type SettingsPageId } from '../settings/SettingsDialog';
 import { Sidebar } from './Sidebar';
@@ -76,6 +77,8 @@ export function MainScreen({
   const [deleting, setDeleting] = useState<Thread | null>(null);
   const [failure, setFailure] = useState<string | null>(secretsUnreadable ? t('app.secretsUnreadable') : null);
   const [diagPrompt, setDiagPrompt] = useState(diagnosticsPrompt);
+  const update = useUpdateState();
+  const [updateDismissed, setUpdateDismissed] = useState(false);
   const currentProvider = providers.find((p) => p.id === bot.providerId);
   const visionOk = specOf(currentProvider, presets.find((x) => x.id === currentProvider?.presetId), bot.model).vision;
   const composer = useComposerImages({ visionOk, model: bot.model });
@@ -247,6 +250,30 @@ export function MainScreen({
             }}>
             <div role="log" aria-label={t('main.conversation', { name: bot.name })} className="chat-column flex min-h-full flex-col gap-5 pt-18 pb-6">
               {diagPrompt && <DiagnosticsNotice onDecide={decideDiagnostics} onDismiss={() => setDiagPrompt(false)} />}
+              {update.phase === 'ready' && !updateDismissed && (
+                <div role="status" className="flex animate-pop-in flex-wrap items-center gap-x-3 gap-y-2 rounded-xl bg-inset px-3.5 py-2.5 ring-[0.5px] ring-ink/10">
+                  <span className="min-w-0 flex-1 text-[13px] text-ink">
+                    {t('update.ready', { version: update.version ?? '' })}
+                  </span>
+                  {running.size > 0 && (
+                    <span className="text-[12px] text-ink-tertiary">{t('update.waitReply')}</span>
+                  )}
+                  <button
+                    type="button"
+                    className={`${PILL_SECONDARY} h-8 px-3.5 text-[13px]`}
+                    disabled={running.size > 0}
+                    onClick={() => void installUpdate().catch((err: unknown) => setFailure(errorText(err)))}>
+                    {t('update.restart')}
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={t('update.dismiss')}
+                    className="shrink-0 rounded-full p-1 text-ink-secondary transition-colors hover:bg-ink/[0.06] hover:text-ink"
+                    onClick={() => setUpdateDismissed(true)}>
+                    <X size={14} aria-hidden />
+                  </button>
+                </div>
+              )}
               {failure !== null && (
                 <div role="alert" className="flex items-start gap-2 rounded-xl bg-danger/10 px-3.5 py-2.5 text-[13px] text-danger">
                   <span className="min-w-0 flex-1 break-words">{failure}</span>
