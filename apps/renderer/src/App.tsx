@@ -7,6 +7,7 @@ import { t } from './i18n';
 import { Splash, prefersReducedMotion } from './splash/Splash';
 import { Onboarding } from './onboarding/Onboarding';
 import { MainScreen } from './main/MainScreen';
+import { setClientErrorSender } from './client-errors';
 
 export type Subscribe = (listener: (event: KernelEvent) => void) => () => void;
 
@@ -38,6 +39,9 @@ export function App() {
       try {
         const conn = await window.minibot.connection();
         const api = createApi(localTransport(conn));
+        setClientErrorSender((input) => {
+          void api.reportClientError(input).catch(() => {});
+        });
         events = connectEvents(conn, (event) => {
           for (const listener of listeners.current) listener(event);
         });
@@ -82,6 +86,7 @@ export function App() {
         secretsUnreadable={boot.state.secretsUnreadable}
         canPersistKeys={boot.state.canPersistKeys}
         defaultWorkspaces={boot.state.defaultWorkspaces}
+        diagnosticsPrompt={boot.state.diagnosticsPrompt}
         onRefresh={async () => {
           const state = await boot.api.state();
           setBoot((b) => b && { ...b, state });

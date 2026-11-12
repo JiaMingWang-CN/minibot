@@ -1,7 +1,7 @@
 // 初始化：全屏居中，一屏一步（模型接入 → 用户画像 → 主 bot → 工作目录）。
 // 只有模型接入必填；之后每步都可以跳过。
 
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import type { Bot, Provider, TestConnectionResult } from '@minibot/core';
 import { Check, ChevronDown, Loader2 } from 'lucide-react';
 import Markdown from 'react-markdown';
@@ -10,6 +10,7 @@ import { Logo } from '../brand/Logo';
 import { cn } from '../lib/cn';
 import { t, type MessageKey } from '../i18n';
 import { FIELD, PILL_PRIMARY, PILL_SECONDARY, TEXT_BUTTON } from '../ui/recipes';
+import { DiagnosticsDetails } from '../settings/DiagnosticsNotice';
 
 const STEPS = ['model', 'profile', 'bot', 'workspace'] as const;
 type Step = (typeof STEPS)[number];
@@ -94,6 +95,17 @@ export function Onboarding({
 
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // 诊断上传：收集点未配置时（available false）不显示这一项
+  const [diagAvailable, setDiagAvailable] = useState(false);
+  const [sendDiagnostics, setSendDiagnostics] = useState(true);
+  const [diagDetails, setDiagDetails] = useState(false);
+
+  useEffect(() => {
+    api.diagnostics().then(
+      (info) => setDiagAvailable(info.available),
+      () => setDiagAvailable(false),
+    );
+  }, [api]);
 
   const model = modelChoice === CUSTOM_MODEL ? customModel.trim() : modelChoice;
   const useEnv = !canPersistKeys || apiKeyEnv.trim().length > 0;
@@ -177,6 +189,10 @@ export function Onboarding({
         ...(persona.trim() ? { persona: persona.trim() } : {}),
         ...(dir.trim() ? { workspace: dir.trim() } : {}),
       });
+      if (diagAvailable) {
+        // 同意状态没存上不影响进入应用：下次启动会在主界面再问
+        await api.setDiagnostics(sendDiagnostics ? 'on' : 'off').catch(() => {});
+      }
       onDone(bot);
     } catch (err) {
       setError(t('onboarding.error.finish', { message: errorText(err) }));
@@ -353,15 +369,37 @@ export function Onboarding({
     );
   } else {
     body = (
-      <input
-        className={FIELD}
-        aria-label={t('onboarding.workspace.label')}
-        value={workspace}
-        onChange={(e) => setWorkspace(e.target.value)}
-        placeholder={t('onboarding.workspace.placeholder')}
-        spellCheck={false}
-        autoFocus
-      />
+      <>
+        <input
+          className={FIELD}
+          aria-label={t('onboarding.workspace.label')}
+          value={workspace}
+          onChange={(e) => setWorkspace(e.target.value)}
+          placeholder={t('onboarding.workspace.placeholder')}
+          spellCheck={false}
+          autoFocus
+        />
+        {diagAvailable && (
+          <div className="flex flex-col gap-2 rounded-xl bg-inset p-3 text-left">
+            <label className="flex items-start gap-2">
+              <input
+                type="checkbox"
+                className="mt-0.5 size-4 accent-ink"
+                checked={sendDiagnostics}
+                onChange={(e) => setSendDiagnostics(e.target.checked)}
+              />
+              <span>
+                <span className="block text-[13px] text-ink">{t('onboarding.diagnostics.label')}</span>
+                <span className="block text-[12px] leading-[18px] text-ink-tertiary">{t('onboarding.diagnostics.hint')}</span>
+              </span>
+            </label>
+            <button type="button" className={cn(TEXT_BUTTON, 'self-start')} onClick={() => setDiagDetails(!diagDetails)}>
+              {t('diagnostics.details')}
+            </button>
+            {diagDetails && <DiagnosticsDetails />}
+          </div>
+        )}
+      </>
     );
   }
 

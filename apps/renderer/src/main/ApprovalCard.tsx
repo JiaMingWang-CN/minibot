@@ -34,7 +34,8 @@ export function ApprovalCard({
     <div
       role="alertdialog"
       aria-label={t('approval.title')}
-      className={cn('flex animate-pop-in flex-col gap-3 rounded-[18px] p-4 transition-opacity', ELEVATED_FLOAT, done && 'opacity-60')}>
+      className={cn('flex max-h-[70dvh] animate-pop-in flex-col gap-3 rounded-[18px] p-4 transition-opacity', ELEVATED_FLOAT, done && 'opacity-60')}>
+      <div className="flex min-h-0 flex-col gap-3 overflow-y-auto">
       <div className="flex items-start gap-2.5">
         <ShieldAlert size={18} className={cn('mt-px shrink-0', done ? 'text-ink-tertiary' : 'text-warning')} aria-hidden />
         <div className="flex min-w-0 flex-1 flex-col gap-1">
@@ -46,21 +47,22 @@ export function ApprovalCard({
         </div>
       </div>
       {request.command !== undefined && (
-        <pre className="overflow-x-auto rounded-lg bg-inset px-3 py-2 font-mono text-[12px] whitespace-pre-wrap">{request.command}</pre>
+        <pre className="shrink-0 break-words rounded-lg bg-inset px-3 py-2 font-mono text-[12px] whitespace-pre-wrap">{request.command}</pre>
       )}
       {request.preview !== undefined && (
         <pre
           aria-label={t('approval.preview')}
-          className="max-h-60 overflow-auto rounded-lg bg-inset px-3 py-2 font-mono text-[12px] whitespace-pre-wrap">
+          className="shrink-0 break-words rounded-lg bg-inset px-3 py-2 font-mono text-[12px] whitespace-pre-wrap">
           {request.preview}
         </pre>
       )}
+      </div>
       {done ? (
-        <span role="status" className={cn('self-end text-[13px]', RESULT[result].tone)}>
+        <span role="status" className={cn('shrink-0 self-end text-[13px]', RESULT[result].tone)}>
           {t(RESULT[result].key)}
         </span>
       ) : (
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
           {request.canAlwaysAllow && (
             <label className="mr-auto flex items-center gap-2 text-[13px] text-ink-secondary">
               <input type="checkbox" className="size-4 accent-[var(--color-ink)]" checked={always} onChange={(e) => setAlways(e.target.checked)} />

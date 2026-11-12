@@ -5,6 +5,7 @@ import type {
   ApprovalRequest,
   Revision,
   Bot,
+  DiagnosticConsent,
   ImageInput,
   KernelEvent,
   KernelState,
@@ -46,6 +47,25 @@ export type BotPatch = Partial<
     | 'memoryEnabled'
   >
 >;
+
+/** 诊断上传的同意状态与本机配置 */
+export interface DiagnosticsInfo {
+  consent: DiagnosticConsent;
+  /** 收集点已配置：反馈入口与开关可用 */
+  available: boolean;
+  appVersion: string;
+}
+
+export interface FeedbackRequest {
+  description: string;
+  contact?: string;
+  attachLogs: boolean;
+}
+
+export interface ClientErrorReport {
+  message: string;
+  stack?: string;
+}
 
 export interface MemoryIndex {
   user: { path: string };
@@ -180,6 +200,12 @@ export function createApi(transport: Transport) {
     startPairing: () => call<RemoteStatus>('POST', '/api/remote/pairing'),
     cancelPairing: () => call<RemoteStatus>('DELETE', '/api/remote/pairing'),
     revokeDevice: (id: string) => call<RemoteStatus>('DELETE', `/api/remote/devices/${enc(id)}`),
+    diagnostics: () => call<DiagnosticsInfo>('GET', '/api/diagnostics'),
+    setDiagnostics: (consent: 'on' | 'off') => call<{ ok: true }>('PUT', '/api/diagnostics', { consent }),
+    logsPreview: () => call<{ text: string }>('GET', '/api/diagnostics/logs-preview'),
+    sendFeedback: (input: FeedbackRequest) => call<{ ok: true }>('POST', '/api/feedback', input),
+    reportClientError: (input: ClientErrorReport) =>
+      call<{ ok: true }>('POST', '/api/diagnostics/client-error', { ...input, source: 'renderer' }),
     pendingApprovals: () => call<ApprovalRequest[]>('GET', '/api/approvals'),
     runningThreads: () => call<string[]>('GET', '/api/running'),
     /** 附件需要令牌才能读，取回后转成 blob: 地址给 <img> 用（CSP 允许 blob: 图片） */

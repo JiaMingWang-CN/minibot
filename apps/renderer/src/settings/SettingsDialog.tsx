@@ -3,18 +3,19 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import type { Bot, KernelState } from '@minibot/core';
-import { Brain, KeyRound, ScrollText, Search, Smartphone, User, X, type LucideIcon } from 'lucide-react';
+import { Brain, Info, KeyRound, ScrollText, Search, Smartphone, User, X, type LucideIcon } from 'lucide-react';
 import type { Api, PresetWithModels } from '../api';
 import type { Subscribe } from '../App';
 import { cn } from '../lib/cn';
 import { t, type MessageKey } from '../i18n';
 import { ActivityPage } from './ActivityPage';
+import { AboutPage } from './AboutPage';
 import { ConsolidationPage } from './ConsolidationPage';
 import { GeneralPage } from './GeneralPage';
 import { PhonePage } from './PhonePage';
 import { ProvidersPage } from './ProvidersPage';
 
-export type SettingsPageId = 'general' | 'providers' | 'consolidation' | 'activity' | 'phone';
+export type SettingsPageId = 'general' | 'providers' | 'consolidation' | 'activity' | 'phone' | 'about';
 
 /** keywords 是语言包里用空格分隔的搜索词 */
 const PAGES: { id: SettingsPageId; label: MessageKey; icon: LucideIcon; keywords: MessageKey }[] = [
@@ -23,6 +24,7 @@ const PAGES: { id: SettingsPageId; label: MessageKey; icon: LucideIcon; keywords
   { id: 'consolidation', label: 'settings.page.consolidation', icon: Brain, keywords: 'settings.keywords.consolidation' },
   { id: 'activity', label: 'settings.page.activity', icon: ScrollText, keywords: 'settings.keywords.activity' },
   { id: 'phone', label: 'settings.page.phone', icon: Smartphone, keywords: 'settings.keywords.phone' },
+  { id: 'about', label: 'settings.page.about', icon: Info, keywords: 'settings.keywords.about' },
 ];
 
 export function SettingsDialog({
@@ -82,6 +84,7 @@ export function SettingsDialog({
     body = <ProvidersPage api={api} bot={bot} providers={providers} presets={presets} canPersistKeys={canPersistKeys} onRefresh={onRefresh} />;
   else if (page === 'consolidation') body = <ConsolidationPage api={api} providers={providers} presets={presets} />;
   else if (page === 'phone') body = <PhonePage api={api} subscribe={subscribe} />;
+  else if (page === 'about') body = <AboutPage api={api} />;
   else body = <ActivityPage api={api} />;
 
   return createPortal(

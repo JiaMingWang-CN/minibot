@@ -18,6 +18,7 @@ import { Composer } from './Composer';
 import { ChatHeader } from './ChatHeader';
 import { CommandAllowlistDialog } from './CommandAllowlistDialog';
 import { BotPanel } from '../panel/BotPanel';
+import { DiagnosticsNotice } from '../settings/DiagnosticsNotice';
 import { SettingsDialog, type SettingsPageId } from '../settings/SettingsDialog';
 import { Sidebar } from './Sidebar';
 import { ThreadDialogs } from './ThreadDialogs';
@@ -45,9 +46,12 @@ export function MainScreen({
   secretsUnreadable,
   canPersistKeys,
   defaultWorkspaces,
+  diagnosticsPrompt,
   onRefresh,
 }: {
   defaultWorkspaces: Record<string, string>;
+  /** 诊断同意状态还是 unset：显示一次提示条 */
+  diagnosticsPrompt: boolean;
   api: Api;
   events: EventConnection;
   subscribe: Subscribe;
@@ -71,6 +75,7 @@ export function MainScreen({
   const [renaming, setRenaming] = useState<Thread | null>(null);
   const [deleting, setDeleting] = useState<Thread | null>(null);
   const [failure, setFailure] = useState<string | null>(secretsUnreadable ? t('app.secretsUnreadable') : null);
+  const [diagPrompt, setDiagPrompt] = useState(diagnosticsPrompt);
   const currentProvider = providers.find((p) => p.id === bot.providerId);
   const visionOk = specOf(currentProvider, presets.find((x) => x.id === currentProvider?.presetId), bot.model).vision;
   const composer = useComposerImages({ visionOk, model: bot.model });
@@ -172,6 +177,11 @@ export function MainScreen({
     }
   };
 
+  const decideDiagnostics = (consent: 'on' | 'off'): void => {
+    setDiagPrompt(false);
+    api.setDiagnostics(consent).catch((err: unknown) => setFailure(errorText(err)));
+  };
+
   const closeRename = useCallback(() => setRenaming(null), []);
   const closeDelete = useCallback(() => setDeleting(null), []);
 
@@ -236,6 +246,7 @@ export function MainScreen({
               if (hasOlder && el.scrollTop < LOAD_OLDER_DISTANCE) void loadOlder();
             }}>
             <div role="log" aria-label={t('main.conversation', { name: bot.name })} className="chat-column flex min-h-full flex-col gap-5 pt-18 pb-6">
+              {diagPrompt && <DiagnosticsNotice onDecide={decideDiagnostics} onDismiss={() => setDiagPrompt(false)} />}
               {failure !== null && (
                 <div role="alert" className="flex items-start gap-2 rounded-xl bg-danger/10 px-3.5 py-2.5 text-[13px] text-danger">
                   <span className="min-w-0 flex-1 break-words">{failure}</span>
