@@ -1,9 +1,24 @@
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import {
+  createHash,
+  createHmac,
+  createPublicKey,
+  diffieHellman,
+  generateKeyPairSync,
+  randomBytes,
+  timingSafeEqual,
+  type KeyObject,
+} from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { WebSocketServer, type RawData, type WebSocket } from 'ws';
 
 // 中继：电脑与手机各自向它建立出站连接，它按 routeId 配对并只转发密文小块，不解析负载。
+//
+// 电脑要证明自己持有路由对应的私钥（口令写在配对二维码里，不能当身份凭证）：
+//   电脑 hello 带上公钥 pk，中继核对 routeId == SHA-256(pk) 前 16 字节；
+//   中继发 {type:'challenge', epk, nonce}（epk 为一次性 X25519 公钥）；
+//   电脑回 {type:'proof', proof}，proof = HMAC-SHA256(SHA-256("minibot-relay-auth/1" || X25519(电脑私钥, epk)), nonce || routeId)；
+//   中继用 X25519(一次性私钥, pk) 算出同样的值才接纳这台电脑。
 
 export const MAX_FRAME_BYTES = 67584;
 const HELLO_TIMEOUT_MS = 5000;
@@ -15,6 +30,18 @@ const PING_INTERVAL_MS = 25_000;
 const PONG_TIMEOUT_MS = 60_000;
 const SESSION_ID_BYTES = 16;
 const HEX32 = /^[0-9a-f]{32}$/;
+const AUTH_LABEL = 'minibot-relay-auth/1';
+const SPKI_X25519_PREFIX = Buffer.from('302a300506032b656e032100', 'hex');
+
+/** 电脑身份证明；电脑端 relay-link.ts 用同一公式 */
+export function pcProof(shared: Buffer, nonce: Buffer, routeId: string): Buffer {
+  const key = createHash('sha256').update(AUTH_LABEL).update(shared).digest();
+  return createHmac('sha256', key).update(nonce).update(Buffer.from(routeId, 'hex')).digest();
+}
+
+function x25519Public(raw: Buffer): KeyObject {
+  return createPublicKey({ key: Buffer.concat([SPKI_X25519_PREFIX, raw]), format: 'der', type: 'spki' });
+}
 
 export interface RelayOptions {
   host: string;
@@ -188,6 +215,43 @@ export async function startRelay(o: RelayOptions): Promise<RelayHandle> {
     });
   };
 
+  const challengePc = (ws: WebSocket, routeId: string, rawPk: unknown): void => {
+    const pk = typeof rawPk === 'string' ? Buffer.from(rawPk, 'base64url') : Buffer.alloc(0);
+    if (pk.length !== 32 || createHash('sha256').update(pk).digest().subarray(0, 16).toString('hex') !== routeId) {
+      ws.close(4403, 'identity mismatch');
+      return;
+    }
+    const ephemeral = generateKeyPairSync('x25519');
+    const epk = Buffer.from(ephemeral.publicKey.export({ type: 'spki', format: 'der' }).subarray(-32));
+    const nonce = randomBytes(32);
+    const timer = setTimeout(() => ws.close(4400, 'proof timeout'), helloTimeoutMs);
+    ws.on('close', () => clearTimeout(timer));
+    ws.once('message', (data: RawData, isBinary: boolean) => {
+      clearTimeout(timer);
+      const buffer = toBuffer(data);
+      const message = isBinary || buffer.length > MAX_HELLO_BYTES ? null : parseJson(buffer);
+      if (message === null || message['type'] !== 'proof' || typeof message['proof'] !== 'string') {
+        ws.close(4400, 'bad proof');
+        return;
+      }
+      let expected: Buffer;
+      try {
+        expected = pcProof(diffieHellman({ privateKey: ephemeral.privateKey, publicKey: x25519Public(pk) }), nonce, routeId);
+      } catch {
+        // 低阶点等无效公钥
+        ws.close(4403, 'identity rejected');
+        return;
+      }
+      const proof = Buffer.from(message['proof'], 'base64url');
+      if (proof.length !== expected.length || !timingSafeEqual(proof, expected)) {
+        ws.close(4403, 'identity rejected');
+        return;
+      }
+      attachPc(ws, routeId);
+    });
+    sendJson(ws, { type: 'challenge', epk: epk.toString('base64url'), nonce: nonce.toString('base64url') });
+  };
+
   wss.on('connection', (ws, req) => {
     connections += 1;
     log(`连接数：${connections}`);
@@ -227,7 +291,7 @@ export async function startRelay(o: RelayOptions): Promise<RelayHandle> {
         return;
       }
       // hello 之后的帧交给各角色的处理函数（once 只吃掉了 hello）
-      if (hello['role'] === 'pc') attachPc(ws, hello['routeId']);
+      if (hello['role'] === 'pc') challengePc(ws, hello['routeId'], hello['pk']);
       else attachPhone(ws, hello['routeId']);
     });
   });

@@ -171,7 +171,7 @@ export class RemoteService {
         this.link = new RelayLink({
           url: config.relayUrl,
           token,
-          routeId: this.store.routeId(),
+          identity: this.store.identity(),
           accept: this.accept('relay'),
           onState: (state, error) => this.setRelay(state, error),
           ...(this.relayBackoffMs !== undefined ? { initialBackoffMs: this.relayBackoffMs } : {}),

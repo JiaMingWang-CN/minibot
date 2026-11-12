@@ -77,6 +77,11 @@ export function publicKeyOf(privateKey: Buffer): Buffer {
   return Buffer.from(pub.export({ type: 'spki', format: 'der' }).subarray(-DH_LEN));
 }
 
+/** X25519：32 字节私钥与对方 32 字节公钥的共享值 */
+export function x25519(priv: Buffer, pub: Buffer): Buffer {
+  return dh(priv, pub);
+}
+
 function dh(priv: Buffer, pub: Buffer): Buffer {
   return diffieHellman({ privateKey: privateKeyObject(priv), publicKey: publicKeyObject(pub) });
 }

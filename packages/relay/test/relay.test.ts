@@ -1,11 +1,43 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import {
+  createHash,
+  createHmac,
+  createPrivateKey,
+  createPublicKey,
+  diffieHellman,
+  generateKeyPairSync,
+} from 'node:crypto';
 import { WebSocket } from 'ws';
 import { startRelay, type RelayHandle } from '../src/relay.ts';
 
 const TOKEN = 'relay-test-token-1234';
-const ROUTE = 'a'.repeat(32);
+
+// 测试用电脑身份：路由 ID 是公钥 SHA-256 的前 16 字节
+interface PcKeys {
+  publicKey: Buffer;
+  privateKey: Buffer;
+}
+function pcKeys(): PcKeys {
+  const { publicKey, privateKey } = generateKeyPairSync('x25519');
+  return {
+    publicKey: Buffer.from(publicKey.export({ type: 'spki', format: 'der' }).subarray(-32)),
+    privateKey: Buffer.from(privateKey.export({ type: 'pkcs8', format: 'der' }).subarray(-32)),
+  };
+}
+const routeOf = (keys: PcKeys): string => createHash('sha256').update(keys.publicKey).digest().subarray(0, 16).toString('hex');
+function proofFor(keys: PcKeys, epk: Buffer, nonce: Buffer, routeId: string): string {
+  const shared = diffieHellman({
+    privateKey: createPrivateKey({ key: Buffer.concat([Buffer.from('302e020100300506032b656e04220420', 'hex'), keys.privateKey]), format: 'der', type: 'pkcs8' }),
+    publicKey: createPublicKey({ key: Buffer.concat([Buffer.from('302a300506032b656e032100', 'hex'), epk]), format: 'der', type: 'spki' }),
+  });
+  const key = createHash('sha256').update('minibot-relay-auth/1').update(shared).digest();
+  return createHmac('sha256', key).update(nonce).update(Buffer.from(routeId, 'hex')).digest('base64url');
+}
+
+const PC = pcKeys();
+const ROUTE = routeOf(PC);
 
 interface Client {
   ws: WebSocket;
@@ -25,15 +57,26 @@ async function waitFor(predicate: () => boolean, timeoutMs = 3000): Promise<void
 async function connect(
   relay: RelayHandle,
   hello: unknown | null,
-  opts: { raw?: Buffer } = {},
+  opts: { raw?: Buffer; prove?: PcKeys | null } = {},
 ): Promise<Client> {
   const ws = new WebSocket(`ws://127.0.0.1:${relay.port}/v1`);
   const texts: Record<string, unknown>[] = [];
   const binaries: Buffer[] = [];
   const closed = new Promise<number>((resolve) => ws.on('close', (code) => resolve(code)));
+  const h = hello as { role?: string; routeId?: string } | null;
+  // 电脑角色默认用测试身份答挑战；prove: null 表示不会答（冒充者）
+  const prover = opts.prove === undefined ? (h?.role === 'pc' ? PC : null) : opts.prove;
   ws.on('message', (data: Buffer, isBinary: boolean) => {
-    if (isBinary) binaries.push(Buffer.from(data));
-    else texts.push(JSON.parse(data.toString('utf8')) as Record<string, unknown>);
+    if (isBinary) {
+      binaries.push(Buffer.from(data));
+      return;
+    }
+    const message = JSON.parse(data.toString('utf8')) as Record<string, unknown>;
+    texts.push(message);
+    if (message['type'] === 'challenge' && prover !== null) {
+      const proof = proofFor(prover, Buffer.from(String(message['epk']), 'base64url'), Buffer.from(String(message['nonce']), 'base64url'), h!.routeId!);
+      ws.send(JSON.stringify({ type: 'proof', proof }));
+    }
   });
   ws.on('error', () => {});
   await new Promise<void>((resolve) => ws.once('open', () => resolve()));
@@ -42,8 +85,11 @@ async function connect(
   return { ws, texts, binaries, closed };
 }
 
-const hello = (role: 'pc' | 'phone', token = TOKEN, routeId = ROUTE) => ({ type: 'hello', role, routeId, token });
-const types = (c: Client): unknown[] => c.texts.map((t) => t['type']);
+const hello = (role: 'pc' | 'phone', token = TOKEN, routeId = ROUTE, pk = PC.publicKey) =>
+  role === 'pc'
+    ? { type: 'hello', role, routeId, token, pk: pk.toString('base64url') }
+    : { type: 'hello', role, routeId, token };
+const types = (c: Client): unknown[] => c.texts.map((t) => t['type']).filter((t) => t !== 'challenge');
 
 async function withRelay(fn: (relay: RelayHandle) => Promise<void>, helloTimeoutMs = 5000): Promise<void> {
   const relay = await startRelay({ host: '127.0.0.1', port: 0, token: TOKEN, helloTimeoutMs });
@@ -215,4 +261,33 @@ test('relay 反代后按真实 IP 限流', async () => {
   } finally {
     await relay.close();
   }
+});
+
+test('relay 冒充电脑：有口令、知道公钥，但答不出挑战', async () => {
+  await withRelay(async (relay) => {
+    const pc = await connect(relay, hello('pc'));
+    const phone = await connect(relay, hello('phone'));
+    await waitFor(() => types(phone).includes('pc_online'));
+    // 公钥写在配对二维码里，谁都拿得到；没有私钥就答不出挑战
+    const fake = await connect(relay, hello('pc'), { prove: pcKeys() });
+    assert.equal(await fake.closed, 4403);
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(pc.ws.readyState, WebSocket.OPEN);
+    assert.deepEqual(types(phone), ['welcome', 'pc_online']);
+  });
+});
+
+test('relay 冒充电脑：公钥与路由 ID 对不上', async () => {
+  await withRelay(async (relay) => {
+    const other = pcKeys();
+    const fake = await connect(relay, hello('pc', TOKEN, ROUTE, other.publicKey), { prove: other });
+    assert.equal(await fake.closed, 4403);
+  });
+});
+
+test('relay 冒充电脑：迟迟不答挑战', async () => {
+  await withRelay(async (relay) => {
+    const fake = await connect(relay, hello('pc'), { prove: null });
+    assert.equal(await fake.closed, 4400);
+  }, 150);
 });

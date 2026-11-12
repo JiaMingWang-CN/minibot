@@ -1,5 +1,8 @@
+import { createHash, createHmac } from 'node:crypto';
 import { WebSocket, type RawData } from 'ws';
 import type { Carrier } from './channel.ts';
+import { x25519, type KeyPair } from './noise.ts';
+import { deviceIdOf } from './store.ts';
 
 // 电脑端到中继的出站连接：收到 session_open 就为该手机会话造一个 Carrier 交给网关。
 
@@ -8,7 +11,8 @@ export type RelayLinkState = 'connecting' | 'connected' | 'error';
 export interface RelayLinkOptions {
   url: string;
   token: string;
-  routeId: string;
+  /** 电脑的长期身份：路由 ID 由公钥算出，私钥用来回答中继的身份挑战 */
+  identity: KeyPair;
   accept: (carrier: Carrier) => void;
   onState: (state: RelayLinkState, error: string | null) => void;
   initialBackoffMs?: number;
@@ -19,6 +23,13 @@ export interface RelayLinkOptions {
 const MAX_BACKOFF_MS = 60_000;
 const PING_INTERVAL_MS = 25_000;
 const SESSION_ID_BYTES = 16;
+const AUTH_LABEL = 'minibot-relay-auth/1';
+
+/** 与中继 packages/relay/src/relay.ts 的 pcProof 同一公式 */
+function pcProof(shared: Buffer, nonce: Buffer, routeId: string): string {
+  const key = createHash('sha256').update(AUTH_LABEL).update(shared).digest();
+  return createHmac('sha256', key).update(nonce).update(Buffer.from(routeId, 'hex')).digest('base64url');
+}
 
 interface SessionCarrier extends Carrier {
   deliver(frame: Buffer): void;
@@ -70,17 +81,21 @@ export class RelayLink {
   private heartbeat: NodeJS.Timeout | null = null;
   private backoff: number;
   private stopped = false;
+  /** 上一次断开是被顶替：重连成功后不重置退避，避免两份同身份实例每秒互踢 */
+  private replaced = false;
+  private readonly routeId: string;
 
   constructor(o: RelayLinkOptions) {
     this.o = o;
     this.backoff = o.initialBackoffMs ?? 1000;
+    this.routeId = deviceIdOf(o.identity.publicKey);
   }
 
   start(): void {
     this.connect();
   }
 
-  /** 因口令错误、被顶替或地址无效而停止，不会再自己重连 */
+  /** 因口令错误、身份被拒或地址无效而停止，不会再自己重连 */
   isStopped(): boolean {
     return this.stopped;
   }
@@ -128,7 +143,15 @@ export class RelayLink {
     });
 
     ws.on('open', () => {
-      ws.send(JSON.stringify({ type: 'hello', role: 'pc', routeId: this.o.routeId, token: this.o.token }));
+      ws.send(
+        JSON.stringify({
+          type: 'hello',
+          role: 'pc',
+          routeId: this.routeId,
+          token: this.o.token,
+          pk: this.o.identity.publicKey.toString('base64url'),
+        }),
+      );
       this.stopHeartbeat();
       const heartbeat = setInterval(() => {
         if (!alive) {
@@ -156,8 +179,19 @@ export class RelayLink {
       } catch {
         return;
       }
-      if (message['type'] === 'welcome') {
-        this.backoff = this.o.initialBackoffMs ?? 1000;
+      if (message['type'] === 'challenge' && typeof message['epk'] === 'string' && typeof message['nonce'] === 'string') {
+        let proof: string;
+        try {
+          const shared = x25519(this.o.identity.privateKey, Buffer.from(message['epk'], 'base64url'));
+          proof = pcProof(shared, Buffer.from(message['nonce'], 'base64url'), this.routeId);
+        } catch {
+          ws.close();
+          return;
+        }
+        ws.send(JSON.stringify({ type: 'proof', proof }));
+      } else if (message['type'] === 'welcome') {
+        if (!this.replaced) this.backoff = this.o.initialBackoffMs ?? 1000;
+        this.replaced = false;
         this.o.onState('connected', null);
       } else if (message['type'] === 'session_open' && typeof message['sessionId'] === 'string') {
         const sessionId = message['sessionId'];
@@ -196,10 +230,15 @@ export class RelayLink {
         this.o.onState('error', '中继口令错误');
         return;
       }
-      if (code === 4409) {
+      if (code === 4403) {
         this.stopped = true;
-        this.o.onState('error', '另一个连接占用了这个路由，已停止重连');
+        this.o.onState('error', '中继拒绝了这台电脑的身份证明');
         return;
+      }
+      // 只有持有同一私钥的连接才能顶替（如同一数据目录开了两份）：按退避重连，不永久放弃
+      if (code === 4409) {
+        this.replaced = true;
+        failure = '另一个使用同一身份的连接顶替了这台电脑';
       }
       if (code === 4429) failure = '中继拒绝了连接（请求过于频繁）';
       this.o.onState('error', failure ?? '与中继的连接已断开');
