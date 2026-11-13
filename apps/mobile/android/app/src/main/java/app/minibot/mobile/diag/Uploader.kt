@@ -27,6 +27,9 @@ class FeedbackException(val kind: String, message: String) : Exception(message)
  * 队列上限 1000（丢最旧）、批量 ≤ 200、积满 50 条或距上次上传 5 分钟触发、
  * 失败指数退避 1 分钟 → 1 小时；400/413 视为毒丸，删除该批。
  */
+/** 预览缓存的有效期：打开预览后半小时内提交才沿用那一份 */
+const val PREVIEW_TTL_MS = 30 * 60 * 1000L
+
 class Uploader(
     private val queueFile: File,
     private val diag: DiagLog,
@@ -62,7 +65,8 @@ class Uploader(
     private var failures = 0
     private var started = false
     /** 预览过的日志：实际上传用同一份 */
-    private var previewedLogs: String? = null
+    /** 预览过的日志与预览时间；超过 PREVIEW_TTL_MS 作废 */
+    @Volatile private var previewedLogs: Pair<String, Long>? = null
     private var unsubscribe: (() -> Unit)? = null
     private var job: Job? = null
 
@@ -183,7 +187,7 @@ class Uploader(
     /** 预览：记住这份内容，提交时若附带日志就用它，保证预览与上传一致 */
     fun previewLogs(): String {
         val text = recentLogs()
-        previewedLogs = text
+        previewedLogs = text to now()
         return text
     }
 
@@ -199,7 +203,11 @@ class Uploader(
             .put("os", os)
             .put("description", description)
         if (!contact.isNullOrBlank()) payload.put("contact", contact)
-        if (attachLogs) payload.put("logs", previewedLogs ?: recentLogs())
+        if (attachLogs) {
+            // 预览过且不久前看的就用那一份；很久以前没提交的预览不再沿用
+            val preview = previewedLogs
+            payload.put("logs", if (preview != null && now() - preview.second <= PREVIEW_TTL_MS) preview.first else recentLogs())
+        }
         val status = runCatching { post("$endpoint/v1/feedback", payload) }.getOrNull()
             ?: throw FeedbackException("network", "网络连接失败")
         when (status) {

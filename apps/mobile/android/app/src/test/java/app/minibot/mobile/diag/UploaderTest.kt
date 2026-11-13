@@ -125,6 +125,19 @@ class UploaderTest {
     }
 
     @Test
+    fun stalePreviewNotReused() = runBlocking {
+        val (uploader, log) = uploader()
+        log.write(LogLevel.INFO, "app", "old line")
+        uploader.previewLogs()
+        nowValue += 31 * 60 * 1000L
+        log.write(LogLevel.INFO, "app", "new line")
+        server.enqueue(MockResponse().setResponseCode(204))
+        uploader.sendFeedback("x", null, true)
+        val body = JSONObject(gunzip(server.takeRequest().body.readByteArray()))
+        assertTrue(body.getString("logs").contains("new line"))
+    }
+
+    @Test
     fun feedbackWithoutLogs() = runBlocking {
         val (uploader, _) = uploader()
         server.enqueue(MockResponse().setResponseCode(204))

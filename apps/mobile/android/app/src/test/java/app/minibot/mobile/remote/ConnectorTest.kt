@@ -287,6 +287,31 @@ class ConnectorTest {
     }
 
     @Test
+    fun rehandshakeOnSameRelayKeepsNewVersionResult() = runTest {
+        // 中继上电脑下线再上线：同一承载上重新握手，version 紧跟 ready 到达，结果不能被重置回 unknown
+        val factory = Factory(
+            backgroundScope,
+            relay = Script(0, peerEvents = listOf(1000L to false, 5000L to true), pcVersion = mapOf("app" to "0.2.0", "protocol" to 1, "minPeer" to 2)),
+        )
+        val c = connector(pairing(relay = "wss://r/v1"), factory)
+        c.start()
+        advanceTimeBy(200)
+        assertEquals("phone_outdated", c.compat)
+        advanceTimeBy(5500)
+        assertEquals(ConnectionState.Connected(Via.RELAY, "测试电脑"), c.state.value)
+        assertEquals("phone_outdated", c.compat)
+    }
+
+    @Test
+    fun nonNumericVersionFieldsAreIgnored() = runTest {
+        val factory = Factory(backgroundScope, relay = Script(0, pcVersion = mapOf("app" to "0.2.0", "protocol" to "x", "minPeer" to 1)))
+        val c = connector(pairing(relay = "wss://r/v1"), factory)
+        c.start()
+        advanceTimeBy(200)
+        assertEquals("unknown", c.compat)
+    }
+
+    @Test
     fun compatibleVersionIsOk() = runTest {
         val factory = Factory(backgroundScope, relay = Script(0, pcVersion = mapOf("app" to "0.2.0", "protocol" to 1, "minPeer" to 1)))
         val c = connector(pairing(relay = "wss://r/v1"), factory)

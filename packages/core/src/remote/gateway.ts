@@ -318,6 +318,7 @@ export class RemoteGateway {
       session.unsubscribe();
       set.delete(session);
       if (set.size === 0) this.sessions.delete(deviceId);
+      else this.refreshDeviceVersion(deviceId, set);
       this.notify();
     });
     channel.onMessage((message) => this.handleMessage(channel, session, message));
@@ -357,6 +358,17 @@ export class RemoteGateway {
     } else if (m['t'] === 'version') {
       this.handleVersion(session, m);
     }
+  }
+
+  /**
+   * 某条会话关闭后，设备的兼容状态改由仍存活的会话决定：最近建立、且已判定过的那条优先。
+   * 同一台手机多条线路同时握手时，落选线路关闭不能把胜出线路的结果留成 unknown。
+   */
+  private refreshDeviceVersion(deviceId: string, live: Set<Session>): void {
+    const sessions = [...live];
+    const decided = sessions.filter((s) => s.version.compat !== 'unknown');
+    const pick = decided[decided.length - 1] ?? sessions[sessions.length - 1];
+    if (pick !== undefined) this.versions.set(deviceId, pick.version);
   }
 
   /** 手机的 version：协议号不兼容时该会话只回 incompatible，不再正常收发 */

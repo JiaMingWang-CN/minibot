@@ -54,6 +54,8 @@ private sealed interface Ev {
     object Ready : Ev
     object Paired : Ev
     object Kick : Ev
+    /** 电脑的 version 消息：与 Ready 走同一个队列，按到达顺序处理 */
+    data class Version(val message: JSONObject) : Ev
 }
 
 private sealed interface Outcome {
@@ -66,10 +68,6 @@ private sealed interface Outcome {
 private class Link(val carrier: Carrier, val via: Via) {
     val events = Channel<Ev>(Channel.UNLIMITED)
     @Volatile var channel: SecureChannel? = null
-    /** 这条线路是否已被认领（局域网同时连上多条时只有胜出的算） */
-    @Volatile var accepted = false
-    /** 认领之前就到达的 version，等胜出后再应用 */
-    @Volatile var pendingVersion: JSONObject? = null
     /** 配对：第二条握手消息已验过，认领这条线路后调用它发出第三条消息 */
     @Volatile var completePairing: (() -> Unit)? = null
 
@@ -282,6 +280,8 @@ class Connector(
         var claimed = false
         var phase = Phase.OPEN
         var connectedOnce = false
+        // 握手完成（Ready）之前到达的 version 先暂存，胜出后再应用
+        var pendingVersion: JSONObject? = null
         while (true) {
             val timed = phase == Phase.OPEN || phase == Phase.HANDSHAKE || phase == Phase.PAIRED
             val ev = if (timed) {
@@ -327,10 +327,9 @@ class Connector(
                     }
                     // 只有胜出的线路能改兼容状态：落选线路的握手完成不能把它重置掉
                     compat = "unknown"
-                    link.accepted = true
-                    link.pendingVersion?.let { handlePeerVersion(it) }
-                    link.pendingVersion = null
                     runCatching { onCompatChanged() }
+                    pendingVersion?.let { handlePeerVersion(it) }
+                    pendingVersion = null
                     if (pair) {
                         phase = Phase.PAIRED
                         try {
@@ -346,6 +345,11 @@ class Connector(
                         _state.value = ConnectionState.Connected(link.via, pcName)
                         Diag.write(LogLevel.INFO, "remote", "connect.ok", mapOf("via" to link.via.name.lowercase()))
                     }
+                }
+                is Ev.Version -> {
+                    // 只有认领后的线路在握手完成状态下才改兼容状态；其余时刻暂存
+                    if (claimed && (phase == Phase.CONNECTED || phase == Phase.PAIRED)) handlePeerVersion(ev.message)
+                    else pendingVersion = ev.message
                 }
                 Ev.Paired -> if (phase == Phase.PAIRED) return Outcome.Paired
                 Ev.Kick -> {
@@ -371,7 +375,7 @@ class Connector(
         channel.onMessage = { message ->
             when (message.optString("t")) {
                 "paired" -> link.events.trySend(Ev.Paired)
-                "version" -> if (link.accepted) handlePeerVersion(message) else link.pendingVersion = message
+                "version" -> link.events.trySend(Ev.Version(message))
                 else -> {
                     // 配对中的地址刚从配对码里拿到，不需要再更新
                     if (!pairing && message.optString("t") == "ready") {
@@ -415,8 +419,9 @@ class Connector(
 
     /** 电脑的 version：协议号不兼容时记录 compat，界面据此提示更新 */
     private fun handlePeerVersion(message: JSONObject) {
-        val protocol = message.optInt("protocol", 1)
-        val minPeer = message.optInt("minPeer", 1)
+        // 与电脑端一致：字段缺失或不是数字就忽略这条消息
+        val protocol = (message.opt("protocol") as? Number)?.toInt() ?: return
+        val minPeer = (message.opt("minPeer") as? Number)?.toInt() ?: return
         val app = message.optString("app").take(64)
         compat = when {
             protocol < MIN_PC_PROTOCOL -> "pc_outdated"

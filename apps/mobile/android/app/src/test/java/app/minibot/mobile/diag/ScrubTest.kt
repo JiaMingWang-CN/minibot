@@ -15,6 +15,14 @@ class ScrubTest {
     }
 
     @Test
+    fun uuidKeptButNotInsideLongToken() {
+        val id = "8988e460-20cf-4194-bcd3-c45c2a3fe2c2"
+        assertEquals("thread $id failed", redactLike("thread $id failed"))
+        assertEquals("k=[REDACTED]", redactLike("k=ak_live_$id"))
+        assertEquals("[REDACTED]", redactLike("x-$id-ZZsecret9"))
+    }
+
+    @Test
     fun pathsAndStack() {
         val ctx = ScrubContext("/data/user/0/app.minibot.mobile", "/data/user/0/app.minibot.mobile")
         assertEquals(

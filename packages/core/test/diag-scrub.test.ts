@@ -93,6 +93,13 @@ test('redactLike: UUID 与 bot id 不当密钥抹掉', () => {
   assert.equal(redactLike(path), path);
 });
 
+test('redactLike: 夹带 UUID 的长密钥仍被抹掉', () => {
+  const id = '8988e460-20cf-4194-bcd3-c45c2a3fe2c2';
+  assert.equal(redactLike(`k=ak_live_${id}`), 'k=[REDACTED]');
+  assert.equal(redactLike(`x-${id}-ZZsecret9`), '[REDACTED]');
+  assert.equal(redactLike(`${id}0`), '[REDACTED]');
+});
+
 test('scrubPaths: 含 UUID 的默认工作区路径替换成 <workspace>', () => {
   const id = '8988e460-20cf-4194-bcd3-c45c2a3fe2c2';
   const ws = 'C:\\Users\\Alice\\.minibot\\workspaces\\' + id;

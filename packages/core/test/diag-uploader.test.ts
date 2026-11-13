@@ -289,6 +289,21 @@ test('queued events go through whitelist', async () => {
   }
 });
 
+test('stale preview is not reused after 30 minutes', async () => {
+  const s = await setup({ consent: 'unset' });
+  try {
+    s.diag.write('info', 'app', 'old line');
+    await s.uploader.previewLogs();
+    s.advance(31 * 60 * 1000);
+    s.diag.write('info', 'app', 'new line');
+    await s.diag.recent(0, 1024 * 1024);
+    await s.uploader.sendFeedback({ description: 'x', attachLogs: true });
+    assert.ok((bodyOf(s.posts[0]!)['logs'] as string).includes('new line'));
+  } finally {
+    await s.close();
+  }
+});
+
 test('feedback uploads the previewed logs', async () => {
   const s = await setup({ consent: 'unset' });
   try {

@@ -56,7 +56,12 @@ class MinibotRemotePlugin : Plugin(), HubSink {
 
     override fun ready(pcName: String) = notifyListeners("ready", JSObject().put("pcName", pcName))
 
-    override fun status() = notifyListeners("status", JSObject(RemoteHub.statusJson().toString()))
+    // statusJson 会读配对存储（含解密），调用方可能在主线程（如权限回调），统一放到 IO 线程
+    override fun status() {
+        RemoteHub.hubScope.launch(Dispatchers.IO) {
+            notifyListeners("status", JSObject(RemoteHub.statusJson().toString()))
+        }
+    }
 
     override fun openThread(threadId: String) = notifyListeners("openThread", JSObject().put("threadId", threadId))
 

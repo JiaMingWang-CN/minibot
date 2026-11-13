@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
@@ -490,5 +491,19 @@ test('flushSync: 崩溃时同步落盘', async () => {
   log.flushSync();
   const text = await fs.readFile(path.join(dir, fileOf(Date.now())), 'utf8');
   assert.ok(text.includes('crash line'));
+  await log.close();
+});
+
+test('flushSync: 正在异步写盘的那一批也同步补上', async () => {
+  const dir = await tmpDir();
+  const log = new DiagLog({ dir, secrets: new SecretSet() });
+  // 先等启动时的清理等 IO 做完，让下一次写盘立刻开始
+  await log.recent(0, 1);
+  log.write('info', 'app', 'in flight line');
+  // 让异步写盘开始（已从缓冲取走这一批，但还没写完），再模拟崩溃
+  await new Promise((resolve) => setImmediate(resolve));
+  log.flushSync();
+  const text = readFileSync(path.join(dir, fileOf(Date.now())), 'utf8');
+  assert.ok(text.includes('in flight line'));
   await log.close();
 });

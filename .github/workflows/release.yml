@@ -22,6 +22,10 @@ jobs:
       - name: 校验标签与根版本一致
         run: |
           VERSION=$(node -p "require('./package.json').version")
+          if ! [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
+            echo "标签 $GITHUB_REF_NAME 不是 vX.Y.Z 或 vX.Y.Z-rc.N"
+            exit 1
+          fi
           TAG="${GITHUB_REF_NAME%-rc.*}"
           TAG="${TAG#v}"
           if [ "$TAG" != "$VERSION" ]; then
@@ -50,10 +54,20 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 标签注释：带 fetch-depth: 0 才能拿到附注标签对象本身
+          # actions/checkout@v4 会把附注标签覆盖成指向提交的轻量标签，这里重新拉取标签对象本身
+          git fetch --force origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+          if [ "$(git cat-file -t "refs/tags/$GITHUB_REF_NAME")" != tag ]; then
+            echo "$GITHUB_REF_NAME 不是附注标签：请用 git tag -a $GITHUB_REF_NAME -m \"更新说明\" 打标签"
+            exit 1
+          fi
           NOTES=$(git for-each-ref --format='%(contents)' "refs/tags/$GITHUB_REF_NAME")
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release edit "$GITHUB_REF_NAME" --draft --title "minibot $GITHUB_REF_NAME" --notes "$NOTES"
+            # 已正式发布的版本不能被改回草稿，否则会从 releases/latest 消失、客户端更新落回旧版
+            if [ "$(gh release view "$GITHUB_REF_NAME" --json isDraft -q .isDraft)" != true ]; then
+              echo "$GITHUB_REF_NAME 已正式发布，拒绝重跑；如需重发请改用新版本号"
+              exit 1
+            fi
+            gh release edit "$GITHUB_REF_NAME" --title "minibot $GITHUB_REF_NAME" --notes "$NOTES"
           else
             gh release create "$GITHUB_REF_NAME" --draft --title "minibot $GITHUB_REF_NAME" --notes "$NOTES"
           fi
@@ -109,7 +123,14 @@ jobs:
       - uses: android-actions/setup-android@v3
       # 签名密钥只写进作业的临时目录，作业结束即销毁，不作为 artifact 上传
       - name: 还原签名 keystore
-        run: echo "${{ secrets.MINIBOT_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/minibot.jks"
+        env:
+          KEYSTORE_BASE64: ${{ secrets.MINIBOT_KEYSTORE_BASE64 }}
+        run: |
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/minibot.jks"
+          if [ ! -s "$RUNNER_TEMP/minibot.jks" ]; then
+            echo "Secret MINIBOT_KEYSTORE_BASE64 为空或无法解码"
+            exit 1
+          fi
       - run: npm ci
       - run: node scripts/sync-version.mjs
       # 手机网页层依赖 @minibot/core 的构建产物（dist 不在仓库里）

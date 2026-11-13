@@ -126,3 +126,22 @@ test('new connection resets compat to unknown', async () => {
     await s.teardown();
   }
 });
+
+test('a losing second session does not leave the device compat at unknown', async () => {
+  const s = await setup();
+  try {
+    const phone = await s.pair();
+    sendVersion(phone, {});
+    const id = await s.deviceId();
+    await waitFor(() => s.gateway.deviceVersion(id).compat === 'ok');
+    // 同一台手机的另一条线路也完成了握手（不发 version），随后被手机关掉
+    const { a, b } = carrierPair();
+    s.gateway.accept(a, 'lan');
+    const loser = await TestPhone.connect(b, phone.keys, phone.pcPublicKey);
+    loser.close();
+    await waitFor(() => s.gateway.deviceVersion(id).compat !== 'unknown');
+    assert.equal(s.gateway.deviceVersion(id).compat, 'ok');
+  } finally {
+    await s.teardown();
+  }
+});

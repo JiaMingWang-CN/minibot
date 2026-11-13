@@ -12,6 +12,9 @@ import type { DiagEvent, DiagLog } from './log.ts';
 
 const gzip = promisify(gzipCallback);
 
+/** 预览缓存的有效期：打开预览后半小时内提交才沿用那一份 */
+const PREVIEW_TTL_MS = 30 * 60 * 1000;
+
 export const DIAG_QUEUE_MAX = 1000;
 export const DIAG_BATCH_MAX = 200;
 export const FEEDBACK_DESCRIPTION_MAX = 5000;
@@ -111,8 +114,8 @@ export class DiagnosticUploader {
   private nextAttemptAt = 0;
   private lastUploadAt = Number.NEGATIVE_INFINITY;
   private stopped = false;
-  /** 预览过的日志：实际上传用同一份，满足“预览与上传内容一致” */
-  private previewedLogs: string | null = null;
+  /** 预览过的日志：实际上传用同一份，满足“预览与上传内容一致”；超过 PREVIEW_TTL_MS 作废 */
+  private previewedLogs: { text: string; at: number } | null = null;
 
   constructor(o: DiagnosticUploaderOptions) {
     this.db = o.db;
@@ -236,7 +239,7 @@ export class DiagnosticUploader {
   /** 预览：记住这份内容，提交时若附带日志就用它，保证预览与上传一致 */
   async previewLogs(): Promise<string> {
     const text = await this.recentLogs();
-    this.previewedLogs = text;
+    this.previewedLogs = { text, at: this.now() };
     return text;
   }
 
@@ -252,7 +255,9 @@ export class DiagnosticUploader {
     };
     if (input.contact !== undefined && input.contact.trim().length > 0) body.contact = input.contact;
     if (input.attachLogs) {
-      body.logs = this.previewedLogs ?? (await this.recentLogs());
+      // 预览过且不久前看的就用那一份；很久以前没提交的预览不再沿用
+      const preview = this.previewedLogs;
+      body.logs = preview !== null && this.now() - preview.at <= PREVIEW_TTL_MS ? preview.text : await this.recentLogs();
     }
     const response = await this.post(`${endpoint}/v1/feedback`, body).catch(() => null);
     if (response === null) throw new FeedbackError('network', '网络连接失败');

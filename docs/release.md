@@ -17,7 +17,7 @@
    ```
 3. GitHub Actions（`.github/workflows/release.yml`）自动构建：
    - 校验标签（去掉可选 `-rc.N` 后缀后必须等于根版本）和 `MINIBOT_COLLECT_URL`（为空直接失败，避免上传与反馈被悄悄关闭）；
-   - 先建一个草稿 Release（正文取附注标签的注释），两端都往这同一个草稿上传，重跑时用 `--clobber` 覆盖；
+   - 先建一个草稿 Release（正文取附注标签的注释），两端都往这同一个草稿上传，重跑时用 `--clobber` 覆盖；标签必须是附注标签（`git tag -a`），轻量标签会让流水线失败；已正式发布的版本不能重跑，要重发请用新版本号；
    - Windows 作业 `--publish never` 打包后手动上传 exe / blockmap / latest.yml；安卓作业先构建 `@minibot/core` 再打 APK，重命名并生成 sha256 后上传。
 4. 两个构建作业都成功后，最后一个作业把草稿 Release 发布；任一失败则 Release 保持草稿，客户端看不到。
 5. 带 `-rc.N` 的标签发布为 prerelease（不再同时标记 latest）；`releases/latest` 与 electron-updater 默认都忽略 prerelease，正式用户不会收到。

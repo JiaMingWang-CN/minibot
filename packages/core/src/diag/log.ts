@@ -72,6 +72,8 @@ export class DiagLog {
   /** 第一个订阅者出现之前发出的事件（如 app.start）先存着，订阅时补发 */
   private backlog: TimedDiagEvent[] | null = [];
   private pending: { day: string; line: string }[] = [];
+  /** 异步写盘已从缓冲取走、但还没写完的行：崩溃时 flushSync 一并补上 */
+  private writing: { batch: { day: string; line: string }[]; from: number } | null = null;
   private flushScheduled = false;
   /** 所有磁盘操作串行执行 */
   private io: Promise<void> = Promise.resolve();
@@ -300,7 +302,10 @@ export class DiagLog {
 
   /** 同步把内存缓冲写盘：崩溃处理器必须在进程退出前调用 */
   flushSync(): void {
-    const batch = this.pending;
+    // 正在异步写的那一批可能还没落盘，一起同步写；万一异步那边也写完了，最多重复几行
+    const inflight = this.writing === null ? [] : this.writing.batch.slice(this.writing.from);
+    const batch = [...inflight, ...this.pending];
+    this.writing = null;
     this.pending = [];
     if (batch.length === 0) return;
     try {
@@ -353,6 +358,8 @@ export class DiagLog {
     const batch = this.pending;
     if (batch.length === 0) return;
     this.pending = [];
+    const writing = { batch, from: 0 };
+    this.writing = writing;
     let index = 0;
     while (index < batch.length) {
       const day = batch[index]!.day;
@@ -370,6 +377,8 @@ export class DiagLog {
         // 目录不可写、磁盘满：丢弃这批，不影响应用
         this.warn(err);
         continue;
+      } finally {
+        writing.from = index;
       }
       this.sinceCleanup += Buffer.byteLength(text);
       const switched = this.currentDay !== day;
