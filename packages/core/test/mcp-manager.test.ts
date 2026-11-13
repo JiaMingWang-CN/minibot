@@ -219,6 +219,32 @@ test('环境隔离：不继承内核进程的其余变量，只含最小系统�
   }
 });
 
+test('停用最后一个使用它的 bot 后，reconcile 断开连接', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'minibot-mcp-'));
+  const paths = dataPaths(root);
+  await fs.mkdir(paths.root, { recursive: true });
+  const secretStore = new SecretStore(paths.secrets, fakeCrypto(), new SecretSet());
+  let enabled = new Set(['s1']);
+  const server = stdioConfig('s1', 's1');
+  const manager = new McpManager({
+    loadServers: async () => [server],
+    enabledServerIds: async () => enabled,
+    secretStore,
+    emit: () => {},
+    home: root,
+    connectTimeoutMs: 10_000,
+  });
+  try {
+    await manager.start();
+    await waitStatus({ manager, events: [], root, close: async () => {} }, 's1', 'connected');
+    enabled = new Set();
+    await manager.reconcile();
+    assert.equal(manager.states()[0]?.status, 'stopped');
+  } finally {
+    await manager.stop();
+  }
+});
+
 test('停止清理进程树：stop 后 stdio server 起的子进程也退出', async () => {
   const h = await harness([]);
   const pidFile = path.join(h.root, 'child.pid');

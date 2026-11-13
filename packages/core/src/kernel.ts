@@ -901,6 +901,7 @@ export class Kernel {
 
     this.diag.addWorkspace(effectiveWorkspace(this.paths, bot));
     await saveBot(this.paths, bot);
+    if (patch.extensions !== undefined) void this.mcp.reconcile();
     return bot;
   }
 

@@ -200,12 +200,21 @@ export class McpManager {
   async start(): Promise<void> {
     this.stopping = false;
     await this.reload();
+    await this.reconcile();
+  }
+
+  /** 按 bot 启用列表对齐连接：停用的断开，重新启用的连上 */
+  async reconcile(): Promise<void> {
     const enabled = await this.opts.enabledServerIds();
     const jobs: Promise<void>[] = [];
     for (const id of this.order) {
-      if (!enabled.has(id)) continue;
-      const entry = this.entries.get(id)!;
-      jobs.push(this.connectInternal(entry, false));
+      const entry = this.entries.get(id);
+      if (entry === undefined) continue;
+      if (!enabled.has(id)) {
+        if (entry.status !== 'stopped') await this.disconnect(id);
+        continue;
+      }
+      if (entry.status === 'stopped') jobs.push(this.connectInternal(entry, false));
     }
     // 不等待全部完成：启动内核不被某个 server 卡住
     void Promise.allSettled(jobs);
