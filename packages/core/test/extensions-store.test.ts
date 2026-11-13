@@ -47,4 +47,17 @@ test('坏文件回退默认值', async () => {
   await fs.writeFile(p.extensionsJson, '{ not json');
   const f = await loadExtensions(p);
   assert.deepEqual(f.web, { fetchEnabled: true, searchEngine: 'none' });
+  // 原文件备份下来，之后保存覆盖也不会丢内容
+  assert.equal(await fs.readFile(`${p.extensionsJson}.bad`, 'utf8'), '{ not json');
+});
+
+test('并发修改联网设置不丢更新', async () => {
+  const { kernelHarness } = await import('./kernel-harness.ts');
+  const h = await kernelHarness();
+  await Promise.all([
+    h.kernel.updateWebSettings({ fetchEnabled: false }),
+    h.kernel.updateWebSettings({ searchEngine: 'none' }),
+  ]);
+  assert.equal((await h.kernel.webSettings()).fetchEnabled, false);
+  await h.kernel.close();
 });

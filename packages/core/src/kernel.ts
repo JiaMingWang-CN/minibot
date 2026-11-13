@@ -1355,17 +1355,20 @@ export class Kernel {
 
   /** 本期只支持网页抓取开关；搜索引擎只能是 none，第 4 期再开放 */
   async updateWebSettings(patch: { fetchEnabled?: boolean; searchEngine?: WebSettings['searchEngine'] }): Promise<WebSettings> {
-    const file = await loadExtensions(this.paths);
-    if (patch.fetchEnabled !== undefined) {
-      if (typeof patch.fetchEnabled !== 'boolean') throw new KernelError('invalid', 'fetchEnabled 必须是布尔值');
-      file.web.fetchEnabled = patch.fetchEnabled;
-    }
-    if (patch.searchEngine !== undefined) {
-      if (patch.searchEngine !== 'none') throw new KernelError('invalid', '搜索引擎不可用');
-      file.web.searchEngine = 'none';
-    }
-    await saveExtensions(this.paths, file);
-    return file.web;
+    // 读改写在同一把锁里，桌面和手机同时修改不丢更新
+    return withPathLock(this.paths.extensionsJson, async () => {
+      const file = await loadExtensions(this.paths);
+      if (patch.fetchEnabled !== undefined) {
+        if (typeof patch.fetchEnabled !== 'boolean') throw new KernelError('invalid', 'fetchEnabled 必须是布尔值');
+        file.web.fetchEnabled = patch.fetchEnabled;
+      }
+      if (patch.searchEngine !== undefined) {
+        if (patch.searchEngine !== 'none') throw new KernelError('invalid', '搜索引擎不可用');
+        file.web.searchEngine = 'none';
+      }
+      await saveExtensions(this.paths, file);
+      return file.web;
+    });
   }
 
   async updateSettings(s: { consolidationModel: AppConfig['consolidationModel'] }): Promise<void> {

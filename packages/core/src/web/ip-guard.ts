@@ -108,6 +108,11 @@ function blockedIPv6(value: bigint): boolean {
   if (value >> 96n === 0x20010db8n) return true;
   // 100::/64 仅丢弃
   if (value >> 64n === 0x100n) return true;
+  // NAT64（64:ff9b::/96）内嵌 IPv4 按 IPv4 规则判断；本地用途 NAT64（64:ff9b:1::/48）一律拒绝
+  if (value >> 32n === 0x64ff9bn << 64n) return blockedIPv4(Number(value & 0xffffffffn));
+  if (value >> 80n === 0x64ff9b0001n) return true;
+  // 6to4（2002::/16）第 17–48 位是 IPv4
+  if (top16 === 0x2002) return blockedIPv4(Number((value >> 80n) & 0xffffffffn));
   // IPv4 映射（::ffff:0:0/96）与 IPv4 兼容（::/96）按 IPv4 规则判断
   const high96 = value >> 32n;
   if (high96 === 0xffffn || high96 === 0n) return blockedIPv4(Number(value & 0xffffffffn));

@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { gzipSync } from 'node:zlib';
 import { FetchError, safeFetch } from '../src/web/safe-fetch.ts';
 
 async function withServer(
@@ -197,4 +198,73 @@ test('正常抓取：返回内容类型、字符集与正文', async () => {
       assert.ok(result.finalUrl.startsWith(base));
     },
   );
+});
+
+/** 防止被测代码挂住时测试也挂住：超过 ms 仍未结束就判失败 */
+function within<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_resolve, reject) => setTimeout(() => reject(new Error(`超过 ${ms}ms 仍未返回`)), ms).unref()),
+  ]);
+}
+
+function stalledGzip(_req: http.IncomingMessage, res: http.ServerResponse): void {
+  const gz = gzipSync(Buffer.from(`<html><body>${'a'.repeat(5000)}</body></html>`));
+  res.writeHead(200, { 'content-type': 'text/html', 'content-encoding': 'gzip' });
+  res.write(gz.subarray(0, 10));
+}
+
+test('压缩响应停住时按超时中断，不挂住', async () => {
+  await withServer(stalledGzip, async (base) => {
+    await assert.rejects(
+      within(safeFetch(`${base}/gz`, new AbortController().signal, { isBlocked: allowLocal, timeoutMs: 150 }), 3000),
+      expectCode('timeout'),
+    );
+  });
+});
+
+test('压缩响应停住时外部中止 → aborted，不挂住', async () => {
+  await withServer(stalledGzip, async (base) => {
+    const controller = new AbortController();
+    const promise = safeFetch(`${base}/gz`, controller.signal, { isBlocked: allowLocal });
+    setTimeout(() => controller.abort(), 100);
+    await assert.rejects(within(promise, 3000), expectCode('aborted'));
+  });
+});
+
+test('不支持的内容类型：报错后立即关闭连接', async () => {
+  let closed = false;
+  await withServer(
+    (req, res) => {
+      req.socket.on('close', () => {
+        closed = true;
+      });
+      res.writeHead(200, { 'content-type': 'image/png' });
+      res.write(Buffer.alloc(1024));
+    },
+    async (base) => {
+      await assert.rejects(
+        safeFetch(`${base}/img`, new AbortController().signal, { isBlocked: allowLocal }),
+        expectCode('unsupported_type'),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      assert.equal(closed, true);
+    },
+  );
+});
+
+test('格式错误的网址 → invalid_url', async () => {
+  await assert.rejects(safeFetch('not a url', new AbortController().signal), expectCode('invalid_url'));
+});
+
+test('DNS 解析停住：超时与外部中止都能结束', async () => {
+  const never = async (): Promise<string[]> => new Promise<string[]>(() => {});
+  await assert.rejects(
+    within(safeFetch('http://slow.test/', new AbortController().signal, { lookup: never, timeoutMs: 150 }), 3000),
+    expectCode('timeout'),
+  );
+  const controller = new AbortController();
+  const promise = safeFetch('http://slow.test/', controller.signal, { lookup: never });
+  setTimeout(() => controller.abort(), 50);
+  await assert.rejects(within(promise, 3000), expectCode('aborted'));
 });

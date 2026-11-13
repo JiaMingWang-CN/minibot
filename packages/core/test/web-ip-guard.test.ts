@@ -35,3 +35,12 @@ test('解析不了的地址按拒绝处理', () => {
   assert.equal(isBlockedAddress('127.0.0.999'), true);
   assert.equal(isBlockedAddress(''), true);
 });
+
+test('守卫 NAT64 与 6to4：内嵌的 IPv4 按 IPv4 规则判断', () => {
+  assert.equal(isBlockedAddress('64:ff9b::a00:1'), true); // 10.0.0.1
+  assert.equal(isBlockedAddress('64:ff9b::7f00:1'), true); // 127.0.0.1
+  assert.equal(isBlockedAddress('64:ff9b:1::1'), true); // 本地用途 NAT64
+  assert.equal(isBlockedAddress('2002:c0a8:101::1'), true); // 192.168.1.1
+  assert.equal(isBlockedAddress('64:ff9b::808:808'), false); // 8.8.8.8
+  assert.equal(isBlockedAddress('2002:808:808::1'), false);
+});

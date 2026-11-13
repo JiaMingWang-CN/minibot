@@ -2,6 +2,7 @@ import dns from 'node:dns';
 import http from 'node:http';
 import https from 'node:https';
 import net from 'node:net';
+import { pipeline } from 'node:stream';
 import { createBrotliDecompress, createGunzip, createInflate } from 'node:zlib';
 import { isBlockedAddress } from './ip-guard.ts';
 
@@ -121,27 +122,61 @@ function requestOnce(url: URL, address: string, family: number, signal: AbortSig
 
 async function readBody(res: http.IncomingMessage, encoding: string | undefined, signal: AbortSignal): Promise<Buffer> {
   const enc = (encoding ?? '').toLowerCase();
-  let stream: NodeJS.ReadableStream = res;
-  if (enc.includes('gzip')) stream = res.pipe(createGunzip());
-  else if (enc.includes('deflate')) stream = res.pipe(createInflate());
-  else if (enc.includes('br')) stream = res.pipe(createBrotliDecompress());
+  const decoder = enc.includes('gzip')
+    ? createGunzip()
+    : enc.includes('deflate')
+      ? createInflate()
+      : enc.includes('br')
+        ? createBrotliDecompress()
+        : null;
+  // 用 pipeline 而不是 pipe：连接被断开时错误会传给解压流，读取循环随之结束，不会挂住
+  const stream: NodeJS.ReadableStream & { destroy(err?: Error): void } =
+    decoder === null ? res : pipeline(res, decoder, () => {});
+  // 超时或外部中止时直接销毁读取端，数据停住时也能立即结束
+  const onAbort = (): void => {
+    res.destroy();
+    stream.destroy(new Error('aborted'));
+  };
+  if (signal.aborted) onAbort();
+  else signal.addEventListener('abort', onAbort, { once: true });
 
   const chunks: Buffer[] = [];
   let total = 0;
-  for await (const chunk of stream) {
-    if (signal.aborted) {
-      res.destroy();
-      throw new Error('aborted');
+  try {
+    for await (const chunk of stream) {
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as unknown as Uint8Array);
+      total += buf.length;
+      if (total > MAX_BODY_BYTES) {
+        res.destroy();
+        stream.destroy();
+        throw new FetchError('too_large');
+      }
+      chunks.push(buf);
     }
-    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as unknown as Uint8Array);
-    total += buf.length;
-    if (total > MAX_BODY_BYTES) {
-      res.destroy();
-      throw new FetchError('too_large');
-    }
-    chunks.push(buf);
+  } finally {
+    signal.removeEventListener('abort', onAbort);
   }
+  if (signal.aborted) throw new Error('aborted');
   return Buffer.concat(chunks);
+}
+
+/** DNS 解析本身不能取消：与中止信号赛跑，超时或停止时立即结束 */
+function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(new Error('aborted'));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(new Error('aborted'));
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (err: unknown) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(err);
+      },
+    );
+  });
 }
 
 function isAbortError(err: unknown): boolean {
@@ -175,7 +210,12 @@ export async function safeFetch(input: string, signal: AbortSignal, deps: SafeFe
   timer.unref();
 
   try {
-    let current = new URL(input);
+    let current: URL;
+    try {
+      current = new URL(input);
+    } catch {
+      throw new FetchError('invalid_url');
+    }
     let redirects = 0;
     for (;;) {
       validateUrl(current);
@@ -185,11 +225,14 @@ export async function safeFetch(input: string, signal: AbortSignal, deps: SafeFe
         addresses = [host];
       } else {
         try {
-          addresses =
+          addresses = await raceAbort(
             deps.lookup !== undefined
-              ? await deps.lookup(host)
-              : (await dns.promises.lookup(host, { all: true })).map((entry) => entry.address);
+              ? deps.lookup(host)
+              : dns.promises.lookup(host, { all: true }).then((list) => list.map((entry) => entry.address)),
+            controller.signal,
+          );
         } catch (err) {
+          if (controller.signal.aborted) throw err;
           throw new FetchError('network', `网络错误：${errorMessage(err)}`);
         }
         if (addresses.length === 0) throw new FetchError('network', '网络错误：没有可用的地址');
@@ -202,7 +245,8 @@ export async function safeFetch(input: string, signal: AbortSignal, deps: SafeFe
       const location = response.headers.location;
 
       if (response.status >= 300 && response.status < 400 && typeof location === 'string') {
-        response.res.resume();
+        // 不读的响应体直接断开，免得连接在返回后还挂着
+        response.res.destroy();
         if (redirects >= MAX_REDIRECTS) throw new FetchError('too_many_redirects');
         redirects += 1;
         try {
@@ -213,14 +257,17 @@ export async function safeFetch(input: string, signal: AbortSignal, deps: SafeFe
         continue;
       }
       if (response.status < 200 || response.status >= 300) {
-        response.res.resume();
+        response.res.destroy();
         throw new FetchError('http_status', `网页返回 HTTP ${response.status}`);
       }
 
       const contentType = String(response.headers['content-type'] ?? '');
       const [mediaTypeRaw, ...params] = contentType.split(';');
       const mediaType = (mediaTypeRaw ?? '').trim().toLowerCase();
-      if (!ALLOWED_TYPES.has(mediaType)) throw new FetchError('unsupported_type', `不支持的内容类型：${mediaType}`);
+      if (!ALLOWED_TYPES.has(mediaType)) {
+        response.res.destroy();
+        throw new FetchError('unsupported_type', `不支持的内容类型：${mediaType}`);
+      }
       let charset: string | null = null;
       for (const param of params) {
         const match = /^\s*charset\s*=\s*"?([^";]+)"?\s*$/i.exec(param);

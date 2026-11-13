@@ -51,6 +51,8 @@ export async function loadExtensions(p: DataPaths): Promise<ExtensionsFile> {
   try {
     return migrate(JSON.parse(text));
   } catch {
+    // 坏文件先备份，之后保存覆盖时不丢原内容
+    await fs.copyFile(p.extensionsJson, `${p.extensionsJson}.bad`).catch(() => {});
     return defaultExtensions();
   }
 }

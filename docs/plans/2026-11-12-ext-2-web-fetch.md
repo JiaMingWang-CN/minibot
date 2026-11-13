@@ -69,10 +69,10 @@
 - `中断`：请求进行中中止外部 `signal` → `aborted`。
 - `内容类型`：`image/png` → `unsupported_type`。
 
-- [ ] **Step 1:** 写上述测试；运行 `node --test packages/core/test/web-ip-guard.test.ts packages/core/test/web-safe-fetch.test.ts`，预期 FAIL。
-- [ ] **Step 2:** 按思路与约束实现。
-- [ ] **Step 3:** 跑同一命令，预期 PASS。
-- [ ] **Step 4:** 提交。
+- [x] **Step 1:** 写上述测试；运行 `node --test packages/core/test/web-ip-guard.test.ts packages/core/test/web-safe-fetch.test.ts`，预期 FAIL。
+- [x] **Step 2:** 按思路与约束实现。
+- [x] **Step 3:** 跑同一命令，预期 PASS。
+- [x] **Step 4:** 提交。
 
 ### Task 2: 正文提取与 `web_fetch` 工具
 
@@ -115,10 +115,10 @@
 - `extensions.json 默认值`：文件不存在 → `fetchEnabled: true`、`searchEngine: 'none'`；写入后再读一致；带未知字段的文件读写后未知字段仍在。
 - `审批`：`ask` 档调用 `web_fetch` → 发审批请求、`source: 'web'`；`edits` 档 → 直接执行。
 
-- [ ] **Step 1:** 写探针确认库可用并锁定版本；写上述测试；运行 `node --test packages/core/test/web-extract.test.ts packages/core/test/web-tools.test.ts packages/core/test/extensions-store.test.ts`，预期 FAIL。
-- [ ] **Step 2:** 按思路与约束实现，在内核里注册 `WebToolProvider`。
-- [ ] **Step 3:** 跑同一命令 PASS，再跑全量无回归；`npm run build --workspace @minibot/core` 通过。
-- [ ] **Step 4:** 提交。
+- [x] **Step 1:** 写探针确认库可用并锁定版本；写上述测试；运行 `node --test packages/core/test/web-extract.test.ts packages/core/test/web-tools.test.ts packages/core/test/extensions-store.test.ts`，预期 FAIL。
+- [x] **Step 2:** 按思路与约束实现，在内核里注册 `WebToolProvider`。
+- [x] **Step 3:** 跑同一命令 PASS，再跑全量无回归；`npm run build --workspace @minibot/core` 通过。
+- [x] **Step 4:** 提交。
 
 ### Task 3: 联网设置页与 bot 联网开关
 
@@ -148,7 +148,7 @@
 - `PUT 非法引擎`：`{ searchEngine: 'tavily' }` → 400。
 - 手动：在临时 `MINIBOT_HOME` 下启动桌面端，打开设置 › 联网和 bot 面板的“扩展”，截图；关掉 bot 的联网后让 bot 读网页，它应说明自己没有这个工具。
 
-- [ ] **Step 1:** 写 dispatch 测试；运行 `node --test packages/core/test/dispatch.test.ts`，预期 FAIL。
-- [ ] **Step 2:** 实现接口与界面。
+- [x] **Step 1:** 写 dispatch 测试；运行 `node --test packages/core/test/dispatch.test.ts`，预期 FAIL。
+- [x] **Step 2:** 实现接口与界面。
 - [ ] **Step 3:** 测试 PASS；`npm run build --workspace @minibot/renderer`、`npm run lint` 通过；按验收手动检查并截图。
-- [ ] **Step 4:** 提交。
+- [x] **Step 4:** 提交。
