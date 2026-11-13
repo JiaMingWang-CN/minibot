@@ -82,6 +82,8 @@ import type { ToolEnv } from './tools/registry.ts';
 import { ToolCatalog, type ExternalTool } from './tools/catalog.ts';
 import { loadExtensions, saveExtensions, type WebSettings } from './extensions/store.ts';
 import { WebToolProvider } from './web/web-tools.ts';
+import { loadMcpServers } from './mcp/config.ts';
+import { McpManager } from './mcp/manager.ts';
 import { callModel as defaultCallModel, instrumentCallModel, testConnection, type CallModel } from './model/client.ts';
 import { DiagLog } from './diag/log.ts';
 import { ModelMetrics } from './diag/metrics.ts';
@@ -198,6 +200,8 @@ export interface OpenOptions {
   now?: () => number;
   /** 是否启动定时上传；测试关掉后手动调用 tickDiagnostics() */
   autoUpload?: boolean;
+  /** 打开系统浏览器（MCP OAuth 授权页）；桌面端传入 shell.openExternal */
+  openExternal?: (url: string) => Promise<void>;
 }
 
 export interface OnboardingInput {
@@ -261,12 +265,15 @@ export class Kernel {
   private fetchImpl: typeof fetch | undefined;
   private nowFn: () => number;
   private autoUpload: boolean;
+  private openExternal: ((url: string) => Promise<void>) | undefined;
   private osName = '';
   private metrics!: ModelMetrics;
   private metricsTimer: NodeJS.Timeout | null = null;
   private uploader!: DiagnosticUploader;
   /** 本地日志与诊断事件 */
   diag!: DiagLog;
+  /** MCP 连接管理；init 里创建 */
+  mcp!: McpManager;
   /** 内置 + 外部工具目录；只读，后续各期在内核里注册 provider */
   readonly tools: ToolCatalog = new ToolCatalog(() => this.diag);
   /** 正在执行一轮对话的线程；此时新消息作为插话 */
@@ -292,6 +299,7 @@ export class Kernel {
     this.fetchImpl = o.fetch;
     this.nowFn = o.now ?? Date.now;
     this.autoUpload = o.autoUpload ?? true;
+    this.openExternal = o.openExternal;
   }
 
   private async init(): Promise<void> {
@@ -328,6 +336,16 @@ export class Kernel {
     this.tools.register(
       new WebToolProvider({ loadSettings: async () => (await loadExtensions(this.paths)).web }),
     );
+    this.mcp = new McpManager({
+      loadServers: () => loadMcpServers(this.paths),
+      enabledServerIds: () => this.mcpServerIdsInUse(),
+      secretStore: this.secretStore,
+      emit: (e) => this.emit(e),
+      home: this.home,
+      platform: this.platform,
+      redact: (text) => this.secretSet.redact(text),
+    });
+    void this.mcp.start();
     this.secretStore.registerEnv(this.envKeyNames());
     this.db = openDb(this.paths.db);
     repairDanglingToolUses(this.db);
@@ -445,6 +463,15 @@ export class Kernel {
         if (changed) await saveBot(this.paths, current);
       });
     }
+  }
+
+  /** 至少一个 bot 启用的 MCP server id */
+  private async mcpServerIdsInUse(): Promise<Set<string>> {
+    const ids = new Set<string>();
+    for (const bot of await this.bots()) {
+      for (const id of bot.extensions.mcpServers) ids.add(id);
+    }
+    return ids;
   }
 
   /** 把每次模型调用的耗时与成败记入指标聚合，供每小时上报 */
@@ -1449,6 +1476,7 @@ export class Kernel {
     this.uploader.close();
     this.queue.abortAll();
     await Promise.allSettled([...this.pendingJobs]);
+    await this.mcp.stop();
     // 整理在数据库关闭后还可能写记忆文件：先中止并等它结束
     await this.consolidator.stop();
     this.db.close();
