@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import type { Bot, Thread } from '@minibot/core';
-import { Bot as BotIcon, MoreHorizontal, Pencil, Plus, Trash2 } from 'lucide-react';
+import { Bot as BotIcon, MoreHorizontal, Pencil, Plus, Settings, Trash2 } from 'lucide-react';
 import { cn } from '@renderer/lib/cn';
 import { t } from '@renderer/i18n';
 import { Menu } from '@renderer/ui/Menu';
@@ -26,6 +26,7 @@ export function ThreadListScreen({
   onNew,
   onRename,
   onDelete,
+  onSettings,
 }: {
   bot: Bot;
   bots: Bot[];
@@ -37,6 +38,7 @@ export function ThreadListScreen({
   onNew: () => void;
   onRename: (thread: Thread) => void;
   onDelete: (thread: Thread) => void;
+  onSettings: () => void;
 }) {
   const [botsOpen, setBotsOpen] = useState(false);
   const botButton = useRef<HTMLButtonElement>(null);
@@ -71,6 +73,9 @@ export function ThreadListScreen({
           </div>
         </Popover>
         <h1 className="sr-only">{t('mobile.threads.title')}</h1>
+        <button type="button" aria-label={t('mobile.settings.open')} className={cn(ICON_BUTTON, 'ml-auto')} onClick={onSettings}>
+          <Settings size={18} aria-hidden />
+        </button>
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto pb-24">

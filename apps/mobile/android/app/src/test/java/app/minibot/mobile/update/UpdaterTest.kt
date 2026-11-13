@@ -113,12 +113,24 @@ class UpdaterTest {
         server.enqueue(MockResponse().setBody(releaseJson("v0.2.0")))
         updater.check(false)
         assertEquals(1, server.requestCount)
-        // 当天第二次自动检查：不发请求
+        // 间隔内第二次自动检查：不发请求
         updater.check(false)
         assertEquals(1, server.requestCount)
         // 手动检查不受限
         server.enqueue(MockResponse().setBody(releaseJson("v0.2.0")))
         updater.check(true)
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun freshProcessRechecks() = runBlocking {
+        var saved = 0L
+        server.enqueue(MockResponse().setBody(releaseJson("v0.2.0")))
+        updater(lastCheckAt = { saved }, saveLastCheckAt = { saved = it }).check(false)
+        // 进程重启（新的 Updater）后，即便刚查过也要重新查，不能把已发现的新版本当成没有
+        server.enqueue(MockResponse().setBody(releaseJson("v0.2.0")))
+        val update = updater(lastCheckAt = { saved }, saveLastCheckAt = { saved = it }).check(false)
+        assertNotNull(update)
         assertEquals(2, server.requestCount)
     }
 }

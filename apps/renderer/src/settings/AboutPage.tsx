@@ -4,9 +4,9 @@ import { useEffect, useState } from 'react';
 import type { Api } from '../api';
 import { t } from '../i18n';
 import { Toast } from '../ui/Toast';
-import { BUTTON, SETTINGS_CARD, SettingRow, SettingsGroup, SettingsRows, Switch, errorText } from '../ui/settings';
+import { BUTTON, BUTTON_PRIMARY, SETTINGS_CARD, SettingRow, SettingsGroup, SettingsRows, Switch, errorText } from '../ui/settings';
 import { cn } from '../lib/cn';
-import { checkForUpdate, useUpdateState } from '../lib/updates';
+import { checkForUpdate, installUpdate, useUpdateState } from '../lib/updates';
 import { DiagnosticsDetails } from './DiagnosticsNotice';
 import { FeedbackDialog } from './FeedbackDialog';
 
@@ -100,9 +100,22 @@ export function AboutPage({ api }: { api: Api }) {
             </SettingRow>
           )}
           <SettingRow title={t('about.update')} subtitle={t('about.updateHint')} message={updateMessage()}>
-            <button type="button" className={BUTTON} disabled={checking} onClick={() => void runCheck()}>
-              {t('about.update')}
-            </button>
+            {update.phase === 'ready' ? (
+              <button
+                type="button"
+                className={BUTTON_PRIMARY}
+                onClick={() => void installUpdate().catch((err: unknown) => setError(errorText(err)))}>
+                {t('update.restart')}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className={BUTTON}
+                disabled={checking || update.phase === 'checking' || update.phase === 'downloading'}
+                onClick={() => void runCheck()}>
+                {t('about.update')}
+              </button>
+            )}
           </SettingRow>
         </SettingsRows>
         {details && info.available && (

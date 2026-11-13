@@ -157,6 +157,12 @@ async function bootstrap(): Promise<void> {
     hasRunningReplies: () => kernel !== undefined && kernel.runningThreads().length > 0,
     onState: (state) => {
       if (mainWindow !== undefined) mainWindow.webContents.send('minibot:update-state', state);
+      // 窗口藏在托盘里时看不到提示条：用系统通知告诉用户，点开回到窗口
+      if (state.phase === 'ready' && (mainWindow === undefined || !mainWindow.isVisible()) && Notification.isSupported()) {
+        const notice = new Notification({ title: 'minibot', body: `新版本 ${state.version ?? ''} 已下载，打开 minibot 重启即可更新。` });
+        notice.on('click', showMainWindow);
+        notice.show();
+      }
     },
   });
   ipcMain.handle('minibot:update-state', (event) => {

@@ -14,7 +14,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 const val RELEASE_API_URL = "https://api.github.com/repos/JiaMingWang-CN/minibot/releases/latest"
-private const val DAY_MS = 24 * 3_600_000L
+/** 自动检查的最短间隔 */
+private const val AUTO_CHECK_INTERVAL_MS = 6 * 3_600_000L
 
 class UpdateException(val kind: String, message: String) : Exception(message)
 
@@ -38,7 +39,7 @@ fun versionCodeOf(tag: String): Int? {
 
 /**
  * 应用内更新：查 GitHub Release、下载 APK、校验大小与 SHA-256 后调起系统安装。
- * 自动检查每天最多一次，手动检查不受限；失败删除半成品。
+ * 自动检查 6 小时最多一次（进程重启后重新查），手动检查不受限；失败删除半成品。
  */
 class Updater(
     private val updateDir: File,
@@ -52,11 +53,13 @@ class Updater(
     private val installer: ((File) -> Unit)? = null,
 ) {
     private var cached: AvailableUpdate? = null
+    /** 本进程里查过的结果才可靠：cached 只在内存，进程重启后必须重新查，否则当天找到的新版本会被当成“没有更新” */
+    private var checkedInProcess = false
 
-    /** 查一次 Release；自动检查在 24 小时内只发一次请求，手动始终请求 */
+    /** 查一次 Release；自动检查在 6 小时内只发一次请求，手动始终请求 */
     suspend fun check(manual: Boolean): AvailableUpdate? {
         val last = lastCheckAt()
-        if (!manual && last > 0 && now() - last < DAY_MS) return cached
+        if (!manual && checkedInProcess && last > 0 && now() - last < AUTO_CHECK_INTERVAL_MS) return cached
         val update = try {
             requestRelease()
         } catch (e: UpdateException) {
@@ -64,6 +67,7 @@ class Updater(
             throw e
         }
         saveLastCheckAt(now())
+        checkedInProcess = true
         cached = update
         logCheck(if (update == null) "none" else "available", null, update?.version)
         return update

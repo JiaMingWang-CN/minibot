@@ -30,7 +30,7 @@ interface Updater {
 }
 
 /** 启动后多久检查一次、之后多久检查一次 */
-const FIRST_CHECK_DELAY_MS = 60_000;
+const FIRST_CHECK_DELAY_MS = 5_000;
 const CHECK_INTERVAL_MS = 6 * 3600_000;
 const NEUTRAL: UpdateState = { phase: 'idle' };
 
@@ -75,7 +75,9 @@ function createUpdater(deps: UpdaterDeps): Updater {
     if (started) return;
     started = true;
     autoUpdater.autoDownload = true;
-    autoUpdater.autoInstallOnAppQuit = true;
+    // 不在退出时偷偷安装：静默安装会刷新整个桌面图标，安装期间再打开应用也会卡住。
+    // 只在用户点“重启更新”时安装，装完自动重新打开
+    autoUpdater.autoInstallOnAppQuit = false;
     autoUpdater.logger = null;
 
     autoUpdater.on('checking-for-update', () => {
@@ -130,6 +132,8 @@ function createUpdater(deps: UpdaterDeps): Updater {
   const check = async (): Promise<UpdateState> => {
     if (!app.isPackaged) return current;
     if (!started) start();
+    // 正在下载或已下载好：不重新检查，否则提示条会先消失再出现
+    if (current.phase === 'downloading' || current.phase === 'ready') return current;
     publish({ phase: 'checking' });
     try {
       await autoUpdater.checkForUpdates();
@@ -153,7 +157,8 @@ function createUpdater(deps: UpdaterDeps): Updater {
       throw new Error('还有回复正在进行，等结束后再重启');
     }
     log('info', 'update.install', {}, { kind: 'update', name: 'update/update.install', data: { result: 'ok' } });
-    autoUpdater.quitAndInstall();
+    // 静默安装（不弹安装向导），装完自动重新打开
+    autoUpdater.quitAndInstall(true, true);
   };
 
   start();

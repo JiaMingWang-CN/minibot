@@ -139,17 +139,34 @@ object RemoteHub {
 
     private fun watchNetwork() {
         val cm = appContext.getSystemService(ConnectivityManager::class.java)
+        // 只有默认网络真的换了（Wi-Fi ↔ 流量）才断开重连。部分系统在应用切到后台 / 回到前台时
+        // 会对同一个网络重复回调 onAvailable，按网络变化处理会把好好的连接断掉，回来就显示“正在重连”
+        var current: Network? = null
         var first = true
         cm.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                // 注册时会立刻回调一次，那不是网络变化
-                if (first) first = false else connector.networkChanged()
+                val changed = !first && network != current
+                first = false
+                current = network
+                if (changed) connector.networkChanged() else connector.retryNow()
             }
 
             override fun onLost(network: Network) {
+                if (network != current) return
+                current = null
                 connector.networkChanged()
             }
+
+            override fun onBlockedStatusChanged(network: Network, blocked: Boolean) {
+                // 系统在后台限制联网后解除：不必等退避
+                if (!blocked) connector.retryNow()
+            }
         })
+    }
+
+    /** 界面回到前台：断着的连接立即重试，不等退避（最长 60 秒） */
+    fun onForeground() {
+        if (initialized) connector.retryNow()
     }
 
     fun startConnection() {

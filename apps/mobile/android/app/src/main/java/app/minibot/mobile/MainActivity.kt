@@ -20,6 +20,7 @@ class MainActivity : BridgeActivity() {
     override fun onStart() {
         super.onStart()
         RemoteHub.webVisible = true
+        RemoteHub.onForeground()
     }
 
     override fun onStop() {

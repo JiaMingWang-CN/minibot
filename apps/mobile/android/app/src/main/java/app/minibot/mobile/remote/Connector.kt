@@ -132,6 +132,11 @@ class Connector(
         activeChannel?.send(message)
     }
 
+    /** 回到前台、网络恢复可用：正在退避等待就立即重试；已连上的连接不受影响 */
+    fun retryNow() {
+        kick.trySend(Unit)
+    }
+
     /** 系统网络变化：立即放弃当前连接 / 退避等待，重新选择线路 */
     fun networkChanged() {
         kick.trySend(Unit)

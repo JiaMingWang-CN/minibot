@@ -12,7 +12,7 @@ import { ApprovalBar } from './ApprovalBar';
 import { MinibotRemote } from './native';
 import { PairScreen } from './screens/PairScreen';
 import { ConversationScreen } from './screens/ConversationScreen';
-import { SettingsSheet, viaText } from './screens/SettingsSheet';
+import { SettingsScreen, viaText } from './screens/SettingsScreen';
 import { ThreadListScreen } from './screens/ThreadListScreen';
 import { nativeEvents, nativeTransport } from './transport';
 import { UpdatePrompt } from './UpdatePrompt';
@@ -105,7 +105,7 @@ function Connected({ boot, onSettings, view, setView, setLaunchHandler }: {
   );
 }
 
-function BotView({ api, events, subscribe, bot, bots, onSelectBot, view, setView, setLaunchHandler }: {
+function BotView({ api, events, subscribe, bot, bots, onSelectBot, view, setView, onSettings, setLaunchHandler }: {
   api: Api;
   events: EventConnection;
   subscribe: Subscribe;
@@ -167,6 +167,7 @@ function BotView({ api, events, subscribe, bot, bots, onSelectBot, view, setView
           onNew={() => void newThread()}
           onRename={setRenaming}
           onDelete={setDeleting}
+          onSettings={onSettings}
         />
       ) : (
         <ConversationScreen
@@ -203,7 +204,10 @@ function BotView({ api, events, subscribe, bot, bots, onSelectBot, view, setView
 export function MobileApp() {
   const status = usePhoneStatus();
   const [boot, setBoot] = useState<Boot | null>(null);
+  // 已发现的新版本（点“稍后”后仍保留，设置页里可以再装）与是否弹出更新对话框
   const [update, setUpdate] = useState<{ version: string; notes: string } | null>(null);
+  const [updateOpen, setUpdateOpen] = useState(false);
+  const dismissedVersion = useRef<string | null>(null);
   const [updateNotice, setUpdateNotice] = useState<string | null>(null);
   const [diagPrompt, setDiagPrompt] = useState(false);
   const [diagAvailable, setDiagAvailable] = useState(false);
@@ -218,15 +222,18 @@ export function MobileApp() {
   const pendingLaunch = useRef<string | null>(null);
   const paired = status?.paired ?? false;
 
-  // 启动时自动查一次更新（原生层每天最多一次），手动检查不受限
+  // 启动和每次回到前台都自动查（原生层 6 小时内只真正请求一次），手动检查不受限。
+  // 自动检查对点过“稍后”的同一版本不再弹窗，设置页里仍显示可更新
   const checkUpdate = useCallback(async (manual: boolean): Promise<void> => {
     try {
       const result = await MinibotRemote.checkUpdate({ manual });
       if (result.available && result.version !== undefined) {
         setUpdate({ version: result.version, notes: result.notes ?? '' });
         setUpdateNotice(null);
-      } else if (manual) {
-        setUpdateNotice(t('about.updateNone'));
+        if (manual || dismissedVersion.current !== result.version) setUpdateOpen(true);
+      } else {
+        setUpdate(null);
+        if (manual) setUpdateNotice(t('about.updateNone'));
       }
     } catch {
       if (manual) setUpdateNotice(t('about.updateError'));
@@ -234,6 +241,11 @@ export function MobileApp() {
   }, []);
   useEffect(() => {
     void checkUpdate(false);
+    const onVisible = (): void => {
+      if (document.visibilityState === 'visible') void checkUpdate(false);
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
   }, [checkUpdate]);
 
   // 首次打开且还没表态：显示与电脑端同样的说明
@@ -281,11 +293,34 @@ export function MobileApp() {
       return next;
     });
   }, []);
+  // 设置页同样压一层历史：返回键先关设置页，再回到列表
+  const settingsRef = useRef(false);
+  const openSettings = useCallback(() => {
+    if (settingsRef.current) return;
+    settingsRef.current = true;
+    history.pushState({ view: 'settings' }, '');
+    setSettingsOpen(true);
+  }, []);
+  const closeSettings = useCallback(() => {
+    if (settingsRef.current) history.back();
+  }, []);
   useEffect(() => {
-    const onPop = (): void => setViewState('list');
+    const onPop = (): void => {
+      if (settingsRef.current) {
+        settingsRef.current = false;
+        setSettingsOpen(false);
+        setGuide(false);
+        return;
+      }
+      setViewState('list');
+    };
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
   }, []);
+  // 取消配对 / 被撤销后回到配对页：设置页一并关掉
+  useEffect(() => {
+    if (!paired) closeSettings();
+  }, [paired, closeSettings]);
 
   // 已配对后建立 API 与事件通道
   useEffect(() => {
@@ -359,8 +394,15 @@ export function MobileApp() {
           </div>
         </Dialog>
       )}
-      {update !== null && (
-        <UpdatePrompt version={update.version} notes={update.notes} onClose={() => setUpdate(null)} />
+      {update !== null && updateOpen && (
+        <UpdatePrompt
+          version={update.version}
+          notes={update.notes}
+          onClose={() => {
+            dismissedVersion.current = update.version;
+            setUpdateOpen(false);
+          }}
+        />
       )}
       {diagAvailable && (
         <FeedbackSheet
@@ -397,7 +439,7 @@ export function MobileApp() {
           revoked={status.connection === 'revoked'}
           onPaired={() => {
             setGuide(true);
-            setSettingsOpen(true);
+            openSettings();
           }}
           onFeedback={diagAvailable ? () => setFeedbackOpen(true) : undefined}
         />
@@ -430,7 +472,7 @@ export function MobileApp() {
       )}
       <button
         type="button"
-        onClick={() => setSettingsOpen(true)}
+        onClick={openSettings}
         className={cn(
           'flex h-7 shrink-0 items-center justify-center gap-1.5 text-[12px]',
           down ? 'bg-warning/10 text-warning' : 'bg-card text-ink-secondary',
@@ -438,21 +480,21 @@ export function MobileApp() {
         {status.pcName !== null && <span className="truncate">{status.pcName}</span>}
         <span>· {viaText(status)}</span>
       </button>
-      <div className="flex min-h-0 flex-1 flex-col">
+      {/* 设置页盖在对话区上：对话区只隐藏不卸载，返回后列表与对话状态都还在 */}
+      <div className={cn('flex min-h-0 flex-1 flex-col', settingsOpen && 'hidden')}>
         {boot !== null && (
-          <Connected boot={boot} onSettings={() => setSettingsOpen(true)} view={view} setView={setView} setLaunchHandler={setLaunchHandler} />
+          <Connected boot={boot} onSettings={openSettings} view={view} setView={setView} setLaunchHandler={setLaunchHandler} />
         )}
       </div>
       {settingsOpen && (
-        <SettingsSheet
+        <SettingsScreen
           status={status}
           guide={guide}
+          availableVersion={update?.version ?? null}
           updateNotice={updateNotice}
           onCheckUpdate={() => void checkUpdate(true)}
-          onClose={() => {
-            setSettingsOpen(false);
-            setGuide(false);
-          }}
+          onInstallUpdate={() => setUpdateOpen(true)}
+          onBack={closeSettings}
         />
       )}
       {overlays}
