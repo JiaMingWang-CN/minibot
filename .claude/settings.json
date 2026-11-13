@@ -2,5 +2,8 @@
   "enabledPlugins": {
     "logo-design@logo-design-skill": true,
     "frontend-design@anthropic-plugin-directory": true
+  },
+  "permissions": {
+    "allow": ["mcp__claude-code-remote__create_trigger"]
   }
 }
