@@ -84,6 +84,7 @@ import { loadExtensions, saveExtensions, type WebSettings } from './extensions/s
 import { WebToolProvider } from './web/web-tools.ts';
 import { loadMcpServers } from './mcp/config.ts';
 import { McpManager } from './mcp/manager.ts';
+import { McpToolProvider } from './mcp/tools.ts';
 import { callModel as defaultCallModel, instrumentCallModel, testConnection, type CallModel } from './model/client.ts';
 import { DiagLog } from './diag/log.ts';
 import { ModelMetrics } from './diag/metrics.ts';
@@ -346,6 +347,9 @@ export class Kernel {
       redact: (text) => this.secretSet.redact(text),
     });
     void this.mcp.start();
+    this.tools.register(
+      new McpToolProvider({ manager: this.mcp, loadServers: () => loadMcpServers(this.paths) }),
+    );
     this.secretStore.registerEnv(this.envKeyNames());
     this.db = openDb(this.paths.db);
     repairDanglingToolUses(this.db);
