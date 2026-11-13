@@ -8,6 +8,8 @@ import { openDb } from '../src/db/db.ts';
 import { createThread } from '../src/db/threads.ts';
 import { appendMessage } from '../src/db/messages.ts';
 import { Kernel, KernelError } from '../src/kernel.ts';
+import { defaultConfig, loadBot, newBot, saveBot, saveConfig } from '../src/config/config.ts';
+import { kernelHarness } from './kernel-harness.ts';
 import type { KernelEvent } from '../src/events.ts';
 import type { KeyCrypto } from '../src/secrets/store.ts';
 import { AbortedError } from '../src/model/types.ts';
@@ -391,6 +393,82 @@ test('deleteProvider：有 bot 在用时抛 provider_in_use', async () => {
     (err: unknown) => err instanceof KernelError && err.code === 'provider_in_use',
   );
   await kernel.close();
+});
+
+test('迁移只给主 bot 开联网；用户之后关掉，重启不会被改回', async () => {
+  const root = await tmpRoot();
+  const paths = dataPaths(root);
+  await fs.mkdir(paths.botsDir, { recursive: true });
+  await saveBot(paths, { ...newBot('main'), name: '主 bot' });
+  await saveBot(paths, { ...newBot('other'), name: '副 bot' });
+  await saveConfig(paths, { ...defaultConfig(), mainBotId: 'main' });
+
+  const k = await Kernel.open({ dataRoot: root, crypto: fakeCrypto(), callModel: echoModel() });
+  let bots = (await k.state()).bots;
+  assert.equal(bots.find((b) => b.id === 'main')!.extensions.web, true);
+  assert.equal(bots.find((b) => b.id === 'other')!.extensions.web, false);
+  assert.equal(JSON.parse(await fs.readFile(paths.config, 'utf8')).extensionsMigrated, true);
+
+  const off = await loadBot(paths, 'main');
+  off.extensions = { ...off.extensions, web: false };
+  await saveBot(paths, off);
+  await k.close();
+  const k2 = await Kernel.open({ dataRoot: root, crypto: fakeCrypto(), callModel: echoModel() });
+  bots = (await k2.state()).bots;
+  assert.equal(bots.find((b) => b.id === 'main')!.extensions.web, false);
+  await k2.close();
+});
+
+test('enableForMainBot 只改主 bot；removeFromAllBots 清掉启用与 allowedMcpTools', async () => {
+  const root = await tmpRoot();
+  const paths = dataPaths(root);
+  await fs.mkdir(paths.botsDir, { recursive: true });
+  await saveBot(paths, { ...newBot('main'), name: '主 bot' });
+  await saveBot(paths, { ...newBot('other'), name: '副 bot' });
+  await saveConfig(paths, { ...defaultConfig(), mainBotId: 'main' });
+  const k = await Kernel.open({ dataRoot: root, crypto: fakeCrypto(), callModel: echoModel() });
+
+  await k.enableForMainBot('mcpServers', 's1');
+  await k.enableForMainBot('mcpServers', 's1');
+  let bots = (await k.state()).bots;
+  assert.deepEqual(bots.find((b) => b.id === 'main')!.extensions.mcpServers, ['s1']);
+  assert.deepEqual(bots.find((b) => b.id === 'other')!.extensions.mcpServers, []);
+
+  for (const id of ['main', 'other']) {
+    const b = await loadBot(paths, id);
+    b.extensions.mcpServers = ['s1'];
+    b.allowedMcpTools = ['s1/x', 's2/y'];
+    await saveBot(paths, b);
+  }
+  await k.removeFromAllBots('mcpServers', 's1');
+  bots = (await k.state()).bots;
+  for (const bot of bots) {
+    assert.equal(bot.extensions.mcpServers.includes('s1'), false);
+    assert.equal(bot.allowedMcpTools.some((key) => key.startsWith('s1/')), false);
+    assert.deepEqual(bot.allowedMcpTools, ['s2/y']);
+  }
+  await k.close();
+});
+
+test('updateBot：拒绝坏 extensions 与坏 allowedMcpTools；接受合法新字段', async () => {
+  const h = await kernelHarness();
+  await assert.rejects(
+    h.kernel.updateBot(h.bot.id, { extensions: { web: true, plugins: [], mcpServers: [] } as never }),
+    (err: unknown) => err instanceof KernelError && err.code === 'invalid',
+  );
+  await assert.rejects(
+    h.kernel.updateBot(h.bot.id, { allowedMcpTools: ['no-slash'] }),
+    (err: unknown) => err instanceof KernelError && err.code === 'invalid',
+  );
+  const updated = await h.kernel.updateBot(h.bot.id, {
+    extensions: { web: true, plugins: ['p1'], mcpServers: ['s1'], skills: ['k1'] },
+    allowWeb: true,
+    allowedMcpTools: ['s1/x', 's1/x'],
+  });
+  assert.deepEqual(updated.extensions, { web: true, plugins: ['p1'], mcpServers: ['s1'], skills: ['k1'] });
+  assert.equal(updated.allowWeb, true);
+  assert.deepEqual(updated.allowedMcpTools, ['s1/x']);
+  await h.close();
 });
 
 test('contextUsage：无消息时为 0；有基线时为基线 token 加其后消息的估算；线程不存在时报错', async () => {

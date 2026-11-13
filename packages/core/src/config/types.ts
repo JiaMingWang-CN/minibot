@@ -41,6 +41,16 @@ export interface AppConfig {
   consolidationModel: { providerId: string; model: string } | null;
   /** 诊断上传的同意状态与本机标识；旧配置加载时补上，saved 后保持稳定 */
   diagnostics?: AppConfigDiagnostics;
+  /** 扩展启用列表的一次性迁移标记；写过一次后不再改动各 bot 的联网开关 */
+  extensionsMigrated?: true;
+}
+
+/** 每个 bot 已启用的扩展：联网、插件、单独的 MCP server、单独的 skill */
+export interface BotExtensions {
+  web: boolean;
+  plugins: string[];
+  mcpServers: string[];
+  skills: string[];
 }
 
 /** unset：只入本地队列不上传；off：不入队并清空队列；反馈不受此开关限制 */
@@ -65,6 +75,12 @@ export interface Bot {
   thinkingLevel: ThinkingLevel | null;
   /** 审批时勾选“总是允许”记下的命令原文，只收简单命令 */
   allowedCommands: string[];
+  /** 该 bot 已启用的扩展 */
+  extensions: BotExtensions;
+  /** 审批时勾选“总是允许联网”后为 true，外部联网工具不再询问 */
+  allowWeb: boolean;
+  /** 审批时勾选“总是允许这个工具”记下的 MCP 工具，条目格式 <serverId>/<原始工具名> */
+  allowedMcpTools: string[];
   /** 关闭后不注入记忆主题、不做后台整理 */
   memoryEnabled: boolean;
 }

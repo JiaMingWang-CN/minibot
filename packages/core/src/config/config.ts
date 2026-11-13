@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { atomicWriteFile } from '../fs/atomic-write.ts';
 import type { DataPaths } from '../paths.ts';
-import type { AppConfig, AppConfigDiagnostics, Bot, CustomModel, Provider, ThinkingLevel } from './types.ts';
+import type { AppConfig, AppConfigDiagnostics, Bot, BotExtensions, CustomModel, Provider, ThinkingLevel } from './types.ts';
 import { APPROVAL_MODES, THINKING_LEVELS } from './types.ts';
 
 import personasData from './default-personas.json' with { type: 'json' };
@@ -32,6 +32,9 @@ export function newBot(id: string, providerId = '', model = ''): Bot {
     approvalMode: 'ask',
     thinkingLevel: null,
     allowedCommands: [],
+    extensions: { web: false, plugins: [], mcpServers: [], skills: [] },
+    allowWeb: false,
+    allowedMcpTools: [],
     memoryEnabled: true,
   };
 }
@@ -134,6 +137,31 @@ function positiveInt(v: unknown): number | null {
   return typeof v === 'number' && Number.isInteger(v) && v > 0 ? v : null;
 }
 
+/** 字符串数组：剔除非字符串并去重，读盘时宽松处理 */
+function stringArray(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const item of v) {
+    if (typeof item !== 'string' || seen.has(item)) continue;
+    seen.add(item);
+    out.push(item);
+  }
+  return out;
+}
+
+const DEFAULT_EXTENSIONS: BotExtensions = { web: false, plugins: [], mcpServers: [], skills: [] };
+
+function migrateExtensions(raw: unknown): BotExtensions {
+  if (!isRecord(raw)) return { ...DEFAULT_EXTENSIONS };
+  return {
+    web: raw['web'] === true,
+    plugins: stringArray(raw['plugins']),
+    mcpServers: stringArray(raw['mcpServers']),
+    skills: stringArray(raw['skills']),
+  };
+}
+
 /** 解析服务下的模型列表；严格模式（用户输入）遇到坏项抛错，宽松模式（读盘）跳过坏项 */
 export function parseCustomModels(raw: unknown, strict: boolean): CustomModel[] {
   if (!Array.isArray(raw)) {
@@ -201,13 +229,15 @@ export function migrate(raw: unknown): AppConfig | Bot {
     if (isRecord(cm) && typeof cm['providerId'] === 'string' && typeof cm['model'] === 'string') {
       consolidationModel = { providerId: cm['providerId'], model: cm['model'] };
     }
-    return {
+    const migrated: AppConfig = {
       schemaVersion: 1,
       providers,
       mainBotId: mainBotId === null || mainBotId.length === 0 ? null : mainBotId,
       consolidationModel,
       diagnostics: migrateDiagnostics(raw['diagnostics']),
     };
+    if (raw['extensionsMigrated'] === true) migrated.extensionsMigrated = true;
+    return migrated;
   }
   if (typeof raw['id'] === 'string') {
     const id = raw['id'];
@@ -243,6 +273,9 @@ export function migrate(raw: unknown): AppConfig | Bot {
       allowedCommands: Array.isArray(raw['allowedCommands'])
         ? raw['allowedCommands'].filter((c): c is string => typeof c === 'string')
         : [],
+      extensions: migrateExtensions(raw['extensions']),
+      allowWeb: raw['allowWeb'] === true,
+      allowedMcpTools: stringArray(raw['allowedMcpTools']),
       memoryEnabled: raw['memoryEnabled'] !== false,
     };
   }

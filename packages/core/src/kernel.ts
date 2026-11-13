@@ -9,6 +9,7 @@ import type {
   AppConfig,
   ApiFormat,
   Bot,
+  BotExtensions,
   CustomModel,
   DiagnosticConsent,
   Preset,
@@ -141,6 +142,26 @@ function feedbackMessage(kind: FeedbackError['kind']): string {
   if (kind === 'rejected') return '反馈内容未被接受，请修改后重试';
   return '反馈服务暂不可用，请稍后再试';
 }
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+function isStringArray(v: unknown): v is string[] {
+  return Array.isArray(v) && v.every((item) => typeof item === 'string');
+}
+
+function isValidExtensions(v: unknown): v is BotExtensions {
+  return (
+    isRecord(v) &&
+    typeof v['web'] === 'boolean' &&
+    isStringArray(v['plugins']) &&
+    isStringArray(v['mcpServers']) &&
+    isStringArray(v['skills'])
+  );
+}
+
+const MCP_TOOL_KEY_RE = /^[^/]+\/.+$/;
 
 export interface KernelState {
   onboarded: boolean;
@@ -298,6 +319,7 @@ export class Kernel {
     } else if (loaded.diagnosticsMigrated) {
       await saveConfig(this.paths, this.config);
     }
+    await this.applyExtensionsMigration();
     this.secretStore.registerEnv(this.envKeyNames());
     this.db = openDb(this.paths.db);
     repairDanglingToolUses(this.db);
@@ -363,6 +385,55 @@ export class Kernel {
         data: { ...(this.appVersion !== undefined ? { appVersion: this.appVersion } : {}), os: osName },
       },
     );
+  }
+
+  /** 一次性迁移：把主 bot 的联网打开，其他 bot 保持关闭；标记写过就永不再改，用户关掉后重启不会被改回 */
+  private async applyExtensionsMigration(): Promise<void> {
+    if (this.config.extensionsMigrated === true) return;
+    const mainBotId = this.config.mainBotId;
+    if (mainBotId !== null) {
+      const main = (await this.bots()).find((b) => b.id === mainBotId);
+      if (main !== undefined) {
+        await withPathLock(this.paths.botJson(main.id), async () => {
+          const bot = await this.loadBotOrThrow(main.id);
+          bot.extensions = { ...bot.extensions, web: true };
+          await saveBot(this.paths, bot);
+        });
+      }
+    }
+    this.config.extensionsMigrated = true;
+    await saveConfig(this.paths, this.config);
+  }
+
+  /** 把新加的扩展默认只对主 bot 启用 */
+  async enableForMainBot(kind: keyof Omit<BotExtensions, 'web'>, id: string): Promise<void> {
+    const mainBotId = this.config.mainBotId;
+    if (mainBotId === null) return;
+    await withPathLock(this.paths.botJson(mainBotId), async () => {
+      const bot = await this.loadBotOrThrow(mainBotId);
+      if (!bot.extensions[kind].includes(id)) bot.extensions[kind] = [...bot.extensions[kind], id];
+      await saveBot(this.paths, bot);
+    });
+  }
+
+  /** 卸载 / 删除扩展：从所有 bot 的启用列表以及 MCP 工具白名单里移除 */
+  async removeFromAllBots(kind: keyof Omit<BotExtensions, 'web'>, id: string): Promise<void> {
+    for (const bot of await this.bots()) {
+      await withPathLock(this.paths.botJson(bot.id), async () => {
+        const current = await this.loadBotOrThrow(bot.id);
+        let changed = false;
+        if (current.extensions[kind].includes(id)) {
+          current.extensions[kind] = current.extensions[kind].filter((x) => x !== id);
+          changed = true;
+        }
+        const allowed = current.allowedMcpTools.filter((key) => !key.startsWith(`${id}/`));
+        if (allowed.length !== current.allowedMcpTools.length) {
+          current.allowedMcpTools = allowed;
+          changed = true;
+        }
+        if (changed) await saveBot(this.paths, current);
+      });
+    }
   }
 
   /** 把每次模型调用的耗时与成败记入指标聚合，供每小时上报 */
@@ -648,6 +719,9 @@ export class Kernel {
       approvalMode: 'ask',
       thinkingLevel: null,
       allowedCommands: [],
+      extensions: { web: true, plugins: [], mcpServers: [], skills: [] },
+      allowWeb: false,
+      allowedMcpTools: [],
       memoryEnabled: true,
     };
     const workspace = effectiveWorkspace(this.paths, bot);
@@ -678,6 +752,9 @@ export class Kernel {
         | 'approvalMode'
         | 'thinkingLevel'
         | 'allowedCommands'
+        | 'extensions'
+        | 'allowWeb'
+        | 'allowedMcpTools'
         | 'memoryEnabled'
       >
     >,
@@ -695,6 +772,30 @@ export class Kernel {
         throw new KernelError('invalid', '“总是允许”只能是不含管道、重定向、变量等的单条命令');
       }
       bot.allowedCommands = [...new Set(patch.allowedCommands)];
+    }
+    if (patch.extensions !== undefined) {
+      if (!isValidExtensions(patch.extensions)) {
+        throw new KernelError('invalid', 'extensions 格式无效');
+      }
+      bot.extensions = {
+        web: patch.extensions.web,
+        plugins: [...new Set(patch.extensions.plugins)],
+        mcpServers: [...new Set(patch.extensions.mcpServers)],
+        skills: [...new Set(patch.extensions.skills)],
+      };
+    }
+    if (patch.allowWeb !== undefined) {
+      if (typeof patch.allowWeb !== 'boolean') throw new KernelError('invalid', 'allowWeb 必须是布尔值');
+      bot.allowWeb = patch.allowWeb;
+    }
+    if (patch.allowedMcpTools !== undefined) {
+      if (
+        !Array.isArray(patch.allowedMcpTools) ||
+        !patch.allowedMcpTools.every((key) => typeof key === 'string' && MCP_TOOL_KEY_RE.test(key))
+      ) {
+        throw new KernelError('invalid', 'allowedMcpTools 格式无效');
+      }
+      bot.allowedMcpTools = [...new Set(patch.allowedMcpTools)];
     }
     if (patch.memoryEnabled !== undefined) {
       if (typeof patch.memoryEnabled !== 'boolean') throw new KernelError('invalid', 'memoryEnabled 必须是布尔值');

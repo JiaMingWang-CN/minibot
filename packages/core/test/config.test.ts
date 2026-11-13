@@ -7,6 +7,7 @@ import { dataPaths } from '../src/paths.ts';
 import type { Provider } from '../src/config/types.ts';
 import {
   loadConfig,
+  loadBot,
   listBots,
   saveBot,
   newBot,
@@ -54,6 +55,49 @@ test('bot 默认值', () => {
   assert.equal(b.maxOutputTokens, 32000);
   assert.equal(b.approvalMode, 'ask');
   assert.equal(b.thinkingLevel, null);
+  assert.deepEqual(b.extensions, { web: false, plugins: [], mcpServers: [], skills: [] });
+  assert.equal(b.allowWeb, false);
+  assert.deepEqual(b.allowedMcpTools, []);
+});
+
+test('migrate 补默认扩展：旧 bot.json（无新字段）→ 扩展全空、web/allowWeb 为 false、allowedMcpTools 为空', async () => {
+  const root = await tmpRoot();
+  const p = dataPaths(root);
+  await fs.mkdir(p.botsDir, { recursive: true });
+  await fs.mkdir(path.join(p.botsDir, 'old'), { recursive: true });
+  const legacy = {
+    schemaVersion: 1,
+    id: 'old',
+    name: '旧 bot',
+    persona: '',
+    providerId: '',
+    model: '',
+    contextWindow: 128000,
+    maxOutputTokens: 32000,
+    workspace: null,
+    approvalMode: 'ask',
+    thinkingLevel: null,
+    allowedCommands: [],
+    memoryEnabled: true,
+  };
+  await fs.writeFile(p.botJson('old'), JSON.stringify(legacy));
+  const bot = await loadBot(p, 'old');
+  assert.deepEqual(bot.extensions, { web: false, plugins: [], mcpServers: [], skills: [] });
+  assert.equal(bot.allowWeb, false);
+  assert.deepEqual(bot.allowedMcpTools, []);
+});
+
+test('migrate 剔除非字符串并去重；类型不对的 web / allowWeb 回退 false', () => {
+  const bot = migrate({
+    schemaVersion: 1,
+    id: 'b1',
+    extensions: { web: 'yes', plugins: ['a', 'a', 1], mcpServers: ['s1'], skills: [null, 'k'] },
+    allowWeb: 'no',
+    allowedMcpTools: ['s1/x', 3, 's1/x'],
+  }) as ReturnType<typeof newBot>;
+  assert.deepEqual(bot.extensions, { web: false, plugins: ['a'], mcpServers: ['s1'], skills: ['k'] });
+  assert.equal(bot.allowWeb, false);
+  assert.deepEqual(bot.allowedMcpTools, ['s1/x']);
 });
 
 test('workspace 为 null 时用默认工作目录', async () => {
