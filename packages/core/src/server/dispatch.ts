@@ -131,6 +131,19 @@ async function route(kernel: Kernel, req: ApiRequest, ctx: DispatchContext): Pro
   if (method === 'GET' && pathname === '/api/settings') {
     return json(200, kernel.settings());
   }
+  if (method === 'GET' && pathname === '/api/extensions/web') {
+    return json(200, await kernel.webSettings());
+  }
+  if (method === 'PUT' && pathname === '/api/extensions/web') {
+    const body = objectBody(await req.readBody(MAX_BODY_BYTES));
+    if ('fetchEnabled' in body && typeof body['fetchEnabled'] !== 'boolean') {
+      throw new KernelError('invalid', 'fetchEnabled 必须是布尔值');
+    }
+    if ('searchEngine' in body && typeof body['searchEngine'] !== 'string') {
+      throw new KernelError('invalid', 'searchEngine 必须是字符串');
+    }
+    return json(200, await kernel.updateWebSettings(body as Parameters<Kernel['updateWebSettings']>[0]));
+  }
   if (method === 'PUT' && pathname === '/api/settings') {
     const body = objectBody(await req.readBody(MAX_BODY_BYTES));
     const value = body['consolidationModel'];

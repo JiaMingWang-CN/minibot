@@ -20,6 +20,7 @@ import type {
   TestConnectionResult,
   Thread,
   ThreadUsage,
+  WebSettings,
 } from '@minibot/core';
 
 export interface Conn {
@@ -161,6 +162,9 @@ export function createApi(transport: Transport) {
     settings: () => call<{ consolidationModel: AppConfig['consolidationModel'] }>('GET', '/api/settings'),
     updateSettings: (input: { consolidationModel: AppConfig['consolidationModel'] }) =>
       call<{ ok: true }>('PUT', '/api/settings', input),
+    webSettings: () => call<WebSettings>('GET', '/api/extensions/web'),
+    updateWebSettings: (patch: { fetchEnabled?: boolean; searchEngine?: 'none' | 'deepseek' | 'tavily' }) =>
+      call<WebSettings>('PUT', '/api/extensions/web', patch),
     approvalLog: (before?: number, limit = 50) => {
       const search = new URLSearchParams({ limit: String(limit) });
       if (before !== undefined) search.set('before', String(before));

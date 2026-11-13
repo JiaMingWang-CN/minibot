@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import type { Bot, KernelState } from '@minibot/core';
-import { Brain, Info, KeyRound, ScrollText, Search, Smartphone, User, X, type LucideIcon } from 'lucide-react';
+import { Brain, Globe, Info, KeyRound, ScrollText, Search, Smartphone, User, X, type LucideIcon } from 'lucide-react';
 import type { Api, PresetWithModels } from '../api';
 import type { Subscribe } from '../App';
 import { cn } from '../lib/cn';
@@ -14,12 +14,14 @@ import { ConsolidationPage } from './ConsolidationPage';
 import { GeneralPage } from './GeneralPage';
 import { PhonePage } from './PhonePage';
 import { ProvidersPage } from './ProvidersPage';
+import { WebPage } from './WebPage';
 
-export type SettingsPageId = 'general' | 'providers' | 'consolidation' | 'activity' | 'phone' | 'about';
+export type SettingsPageId = 'general' | 'web' | 'providers' | 'consolidation' | 'activity' | 'phone' | 'about';
 
 /** keywords 是语言包里用空格分隔的搜索词 */
 const PAGES: { id: SettingsPageId; label: MessageKey; icon: LucideIcon; keywords: MessageKey }[] = [
   { id: 'general', label: 'settings.page.general', icon: User, keywords: 'settings.keywords.general' },
+  { id: 'web', label: 'settings.page.web', icon: Globe, keywords: 'settings.keywords.web' },
   { id: 'providers', label: 'settings.page.providers', icon: KeyRound, keywords: 'settings.keywords.providers' },
   { id: 'consolidation', label: 'settings.page.consolidation', icon: Brain, keywords: 'settings.keywords.consolidation' },
   { id: 'activity', label: 'settings.page.activity', icon: ScrollText, keywords: 'settings.keywords.activity' },
@@ -80,6 +82,7 @@ export function SettingsDialog({
 
   let body: ReactNode;
   if (page === 'general') body = <GeneralPage api={api} bot={bot} memoryVersion={memoryVersion} />;
+  else if (page === 'web') body = <WebPage api={api} />;
   else if (page === 'providers')
     body = <ProvidersPage api={api} bot={bot} providers={providers} presets={presets} canPersistKeys={canPersistKeys} onRefresh={onRefresh} />;
   else if (page === 'consolidation') body = <ConsolidationPage api={api} providers={providers} presets={presets} />;

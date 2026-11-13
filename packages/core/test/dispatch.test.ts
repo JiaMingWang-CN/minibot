@@ -60,3 +60,33 @@ test('REMOTE_FORBIDDEN 形状', () => {
   assert.ok('json' in REMOTE_FORBIDDEN);
   assert.equal((REMOTE_FORBIDDEN.json as { error: { code: string } }).error.code, 'remote_forbidden');
 });
+
+test('PUT 网页抓取：关闭后 GET 返回 false，快照里没有 web_fetch', async () => {
+  const h = await kernelHarness();
+  try {
+    const before = await dispatchApi(h.kernel, req('GET', '/api/extensions/web'));
+    assert.equal(before.status, 200);
+    assert.deepEqual(before.json, { fetchEnabled: true, searchEngine: 'none' });
+    assert.ok((await h.kernel.tools.snapshot(h.bot)).specs.some((s) => s.name === 'web_fetch'));
+
+    const put = await dispatchApi(h.kernel, req('PUT', '/api/extensions/web', { fetchEnabled: false }));
+    assert.equal(put.status, 200);
+    const after = await dispatchApi(h.kernel, req('GET', '/api/extensions/web'));
+    assert.deepEqual(after.json, { fetchEnabled: false, searchEngine: 'none' });
+    assert.equal((await h.kernel.tools.snapshot(h.bot)).specs.some((s) => s.name === 'web_fetch'), false);
+  } finally {
+    await h.close();
+  }
+});
+
+test('PUT 非法搜索引擎返回 400', async () => {
+  const h = await kernelHarness();
+  try {
+    const res = await dispatchApi(h.kernel, req('PUT', '/api/extensions/web', { searchEngine: 'tavily' }));
+    assert.equal(res.status, 400);
+    assert.ok('json' in res);
+    assert.equal((res.json as { error: { message: string } }).error.message, '搜索引擎不可用');
+  } finally {
+    await h.close();
+  }
+});

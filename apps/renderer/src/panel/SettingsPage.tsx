@@ -3,12 +3,12 @@
 
 import { useState } from 'react';
 import type { ApprovalMode } from '@minibot/core';
-import { FileText, Gauge, ListChecks, ShieldCheck, Text } from 'lucide-react';
+import { FileText, Gauge, Globe, ListChecks, ShieldCheck, Text } from 'lucide-react';
 import { cn } from '../lib/cn';
 import { t, type MessageKey } from '../i18n';
 import { errorText } from '../ui/settings';
 import type { PanelContext } from './BotPanel';
-import { Card, ColRow, LinkRow, NoteRow, RowIcon, RowText, Segmented, TrashButton, panelInputCls, primaryButtonCls, rowCls } from './rows';
+import { Card, ColRow, LinkRow, NoteRow, RowIcon, RowText, Segmented, SwitchRow, TrashButton, panelInputCls, primaryButtonCls, rowCls } from './rows';
 
 const MODES: ApprovalMode[] = ['ask', 'edits', 'auto'];
 
@@ -136,6 +136,18 @@ export function SettingsPage({ bot, patch, isRunning, onOpenAllowlist }: PanelCo
         <LinkRow icon={ListChecks} onClick={onOpenAllowlist}>
           {t('allowlist.manage')}
         </LinkRow>
+      </Card>
+
+      <Card label={t('panel.extensions')}>
+        <SwitchRow
+          icon={Globe}
+          title={t('panel.extWeb')}
+          hint={t('panel.extWebHint')}
+          checked={bot.extensions.web}
+          onChange={() =>
+            run(patch({ extensions: { ...bot.extensions, web: !bot.extensions.web } }))
+          }
+        />
       </Card>
 
       <Card label={t('panel.modelLimits')}>
