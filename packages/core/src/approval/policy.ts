@@ -28,3 +28,14 @@ const SHELL_META = /[|&;<>$`(){}\r\n]/;
 export function isSimpleCommand(command: string): boolean {
   return command.trim().length > 0 && !SHELL_META.test(command);
 }
+
+/**
+ * 外部工具的审批判断（spec §5.1）：
+ * web：ask 档要问，edits / auto 放行；mcp：ask / edits 都要问，只有 auto 放行。
+ * MCP server 自报的 readOnlyHint 等标注不参与这里的判断。
+ */
+export function decideExternal(mode: ApprovalMode, kind: 'web' | 'mcp'): 'allow' | 'ask' {
+  if (mode === 'auto') return 'allow';
+  if (kind === 'web') return mode === 'edits' ? 'allow' : 'ask';
+  return 'ask';
+}

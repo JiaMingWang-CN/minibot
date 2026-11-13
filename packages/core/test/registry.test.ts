@@ -11,6 +11,8 @@ import { SecretSet, REDACTED } from '../src/secrets/redact.ts';
 import { ReadTracker } from '../src/tools/read-tracker.ts';
 import { ApprovalBroker } from '../src/approval/broker.ts';
 import { TOOL_SPECS, executeTool, type ToolEnv } from '../src/tools/registry.ts';
+import { ToolCatalog, type ExternalTool } from '../src/tools/catalog.ts';
+import { DiagLog, type TimedDiagEvent } from '../src/diag/log.ts';
 import type { Block } from '../src/model/types.ts';
 
 type ToolUse = Extract<Block, { type: 'tool_use' }>;
@@ -183,3 +185,88 @@ test('审批请求带内容预览：write_file 是写入内容，edit_file 是�
   await running;
   close();
 });
+
+function externalTool(
+  name: string,
+  run: ExternalTool['run'],
+  source: 'web' | 'mcp' = 'mcp',
+): ExternalTool {
+  return {
+    spec: { name, description: name, parameters: { type: 'object', properties: {} } },
+    source: source === 'web' ? { kind: 'web' } : { kind: 'mcp', serverId: 's1', serverName: 'S1', toolName: name },
+    summarize: () => `调用 ${name}`,
+    run,
+  };
+}
+
+async function setupExternal(tools: ExternalTool[], mode: 'ask' | 'auto' = 'auto') {
+  const base = await setup();
+  base.env.bot.approvalMode = mode;
+  const catalog = new ToolCatalog();
+  catalog.register({ toolsFor: async () => tools });
+  base.env.toolset = await catalog.snapshot(base.env.bot);
+  return base;
+}
+
+test('外部工具结果超过 30000 字符：截断并写入 outputs 目录', async () => {
+  const { paths, env, close } = await setupExternal([
+    externalTool('fake__big', async () => ({ content: 'x'.repeat(40000), isError: false })),
+  ]);
+  const result = await executeTool(call('fake__big', {}), env);
+  assert.equal(result.status, 'ok');
+  assert.ok(result.content.includes('完整输出见'));
+  const files = await fs.readdir(paths.outputs);
+  assert.equal(files.length, 1);
+  close();
+});
+
+test('外部工具结果出口脱敏', async () => {
+  const key = 'sk-external-secret-123';
+  const { env, close } = await setupExternal([
+    externalTool('fake__leak', async () => ({ content: `key=${key}`, isError: false })),
+  ]);
+  env.secrets.add(key);
+  const result = await executeTool(call('fake__leak', {}), env);
+  assert.equal(result.status, 'ok');
+  assert.ok(result.content.includes(REDACTED));
+  assert.equal(result.content.includes(key), false);
+  close();
+});
+
+test('外部工具抛异常 → 工具执行失败：boom，不外抛', async () => {
+  const { env, close } = await setupExternal([
+    externalTool('fake__boom', async () => {
+      throw new Error('boom');
+    }),
+  ]);
+  const result = await executeTool(call('fake__boom', {}), env);
+  assert.equal(result.status, 'error');
+  assert.equal(result.content, '工具执行失败：boom');
+  close();
+});
+
+test('未知外部工具 → 未知工具，且不发诊断错误事件', async () => {
+  const { root, env, close } = await setupExternal([]);
+  const events: TimedDiagEvent[] = [];
+  const diag = new DiagLog({ dir: path.join(root, 'logs'), secrets: env.secrets });
+  diag.onEvent((e) => events.push(e));
+  env.diag = diag;
+  const result = await executeTool(call('nope__x', {}), env);
+  assert.equal(result.status, 'error');
+  assert.ok(result.content.startsWith('未知工具'));
+  assert.equal(events.some((e) => e.kind === 'error'), false);
+  await diag.close();
+  close();
+});
+
+test('外部工具名与内置工具同名时，执行仍走内置逻辑', async () => {
+  const { env, close } = await setupExternal([
+    externalTool('read_file', async () => ({ content: '外部实现', isError: false })),
+  ]);
+  env.bot.approvalMode = 'ask';
+  const result = await executeTool(call('read_file', {}), env);
+  assert.equal(result.status, 'error');
+  assert.ok(result.content.includes('参数错误'));
+  close();
+});
+

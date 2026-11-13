@@ -1,7 +1,5 @@
 import { execFile } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
-import path from 'node:path';
 import {
   decodeOutput,
   detectAnsiEncoding,
@@ -11,32 +9,13 @@ import {
   trimUtf8Start,
   type RunProcessResult,
 } from './process.ts';
+import { clipToOutputs, OUTPUT_KEEP, OUTPUT_LIMIT, OUTPUT_RETENTION_MS } from './output.ts';
 import type { ToolOutput } from './types.ts';
+
+export { OUTPUT_KEEP, OUTPUT_LIMIT, OUTPUT_RETENTION_MS };
 
 export const DEFAULT_TIMEOUT_MS = 120_000;
 export const MAX_TIMEOUT_MS = 600_000;
-export const OUTPUT_LIMIT = 30_000;
-export const OUTPUT_KEEP = 15_000;
-export const OUTPUT_RETENTION_MS = 7 * 24 * 3600 * 1000;
-
-async function pruneOutputs(dir: string): Promise<void> {
-  const cutoff = Date.now() - OUTPUT_RETENTION_MS;
-  let names: string[];
-  try {
-    names = await fs.readdir(dir);
-  } catch {
-    return;
-  }
-  for (const name of names) {
-    const file = path.join(dir, name);
-    try {
-      const stat = await fs.stat(file);
-      if (stat.isFile() && stat.mtimeMs < cutoff) await fs.unlink(file);
-    } catch {
-      // 清理失败不影响命令结果
-    }
-  }
-}
 
 let windowsShell: Promise<string> | undefined;
 
@@ -101,16 +80,7 @@ export async function runCommand(
       ? decodeOutput(result.output, encoding)
       : `${decodeOutput(trimUtf8End(result.output), encoding)}\n[已丢弃中间 ${result.droppedBytes} 字节输出]\n${decodeOutput(trimUtf8Start(result.tail), encoding)}`;
   const text = ctx.redact === undefined ? raw : ctx.redact(raw);
-  let display = text;
-  if (text.length > OUTPUT_LIMIT) {
-    await fs.mkdir(ctx.outputsDir, { recursive: true });
-    await pruneOutputs(ctx.outputsDir);
-    const fileName = `output-${Date.now()}-${randomBytes(4).toString('hex')}.txt`;
-    const fullPath = path.join(ctx.outputsDir, fileName);
-    await fs.writeFile(fullPath, text, 'utf8');
-    const omitted = text.length - OUTPUT_LIMIT;
-    display = `${text.slice(0, OUTPUT_KEEP)}[已省略中间 ${omitted} 个字符，完整输出见 ${fullPath}]\n${text.slice(-OUTPUT_KEEP)}`;
-  }
+  const display = await clipToOutputs(text, ctx.outputsDir);
 
   const header = `退出码: ${result.exitCode === null ? 'null' : result.exitCode}\n超时: ${
     result.timedOut ? '是' : '否'

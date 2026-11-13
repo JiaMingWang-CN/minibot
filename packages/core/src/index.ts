@@ -43,6 +43,7 @@ export type { ApprovalLogEntry } from './db/approval-log.ts';
 export type { Thread } from './db/threads.ts';
 export type {
   Bot,
+  BotExtensions,
   Provider,
   Preset,
   KnownModel,
@@ -55,6 +56,16 @@ export type {
   ApprovalMode,
 } from './config/types.ts';
 export type { ApprovalRequest } from './approval/broker.ts';
+export {
+  ToolCatalog,
+  type ToolSource,
+  type ExternalSource,
+  type ExternalTool,
+  type ExternalToolProvider,
+  type ExternalCallContext,
+  type TurnToolset,
+} from './tools/catalog.ts';
+export { clipToOutputs } from './tools/output.ts';
 export type { Revision, RevisionSource } from './memory/revisions.ts';
 export { RemoteService, type RemoteStatus, type RemoteConfig, type Device } from './remote/service.ts';
 export {

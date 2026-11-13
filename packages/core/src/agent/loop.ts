@@ -7,6 +7,7 @@ import { historyForModel, imagesOf } from '../model/adapter.ts';
 import { AbortedError, ModelError } from '../model/types.ts';
 import type { AssistantResult, Block, StoredMessage, Usage } from '../model/types.ts';
 import { TOOL_SPECS, executeTool, type ToolEnv } from '../tools/registry.ts';
+import type { TurnToolset } from '../tools/catalog.ts';
 import { CANCELLED_TEXT, appendMessage } from '../db/messages.ts';
 import { updateThread } from '../db/threads.ts';
 import { buildTopicIndex } from '../memory/topics.ts';
@@ -23,6 +24,8 @@ export interface TurnDeps {
   emit: (e: KernelEvent) => void;
   resolveModel: (bot: Bot) => { provider: Provider; apiKey: string };
   makeToolEnv: (bot: Bot, threadId: string, signal: AbortSignal) => ToolEnv;
+  /** 每轮开头取一次工具快照，本轮所有模型调用与工具执行都用它；不给时只用内置工具 */
+  snapshotTools?: (bot: Bot) => Promise<TurnToolset>;
   prepareContext: (
     threadId: string,
     bot: Bot,
@@ -150,6 +153,12 @@ export async function runTurn(
   try {
     const env = deps.makeToolEnv(bot, threadId, signal);
     envRef = env;
+    // 本轮工具快照：开头取一次，本轮不再重新取；用户中途开关扩展下一轮才生效
+    const toolset: TurnToolset =
+      deps.snapshotTools === undefined
+        ? { specs: TOOL_SPECS, external: () => undefined }
+        : await deps.snapshotTools(bot);
+    env.toolset = toolset;
     let userMd = '';
     try {
       userMd = await fs.readFile(env.paths.userMd, 'utf8');
@@ -168,7 +177,7 @@ export async function runTurn(
       now: new Date(),
     });
 
-    const systemForEstimate = system + JSON.stringify(TOOL_SPECS);
+    const systemForEstimate = system + JSON.stringify(toolset.specs);
     const retryDelays = deps.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
     let toolRounds = 0;
     for (;;) {
@@ -207,7 +216,7 @@ export async function runTurn(
               model: bot.model,
               system,
               messages,
-              tools: TOOL_SPECS,
+              tools: toolset.specs,
               maxTokens: bot.maxOutputTokens,
               thinkingLevel: bot.thinkingLevel,
               ...(attachments !== undefined ? { attachments } : {}),

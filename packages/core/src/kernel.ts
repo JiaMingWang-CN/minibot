@@ -79,6 +79,7 @@ import { SecretSet } from './secrets/redact.ts';
 import { SecretStore, type KeyCrypto } from './secrets/store.ts';
 import { ReadTracker } from './tools/read-tracker.ts';
 import type { ToolEnv } from './tools/registry.ts';
+import { ToolCatalog, type ExternalTool } from './tools/catalog.ts';
 import { callModel as defaultCallModel, instrumentCallModel, testConnection, type CallModel } from './model/client.ts';
 import { DiagLog } from './diag/log.ts';
 import { ModelMetrics } from './diag/metrics.ts';
@@ -264,6 +265,8 @@ export class Kernel {
   private uploader!: DiagnosticUploader;
   /** 本地日志与诊断事件 */
   diag!: DiagLog;
+  /** 内置 + 外部工具目录；只读，后续各期在内核里注册 provider */
+  readonly tools: ToolCatalog = new ToolCatalog(() => this.diag);
   /** 正在执行一轮对话的线程；此时新消息作为插话 */
   private activeTurns = new Set<string>();
   /** 线程运行中收到、还没插入的插话 */
@@ -990,6 +993,7 @@ export class Kernel {
             emit: (e) => this.emit(e),
             resolveModel: (b) => this.resolveModel(b),
             makeToolEnv: (b, id, s) => this.makeToolEnv(b, id, s),
+            snapshotTools: (b) => this.tools.snapshot(b),
             prepareContext: this.prepareContext,
             takeSteer: (id) => {
               const items = this.steer.get(id) ?? [];
@@ -1111,6 +1115,8 @@ export class Kernel {
       tracker = new ReadTracker();
       this.trackers.set(threadId, tracker);
     }
+    const provider = this.findProvider(bot.providerId);
+    const supportsImages = provider === undefined ? true : (findCustomModel(provider, bot.model)?.vision ?? true);
     return {
       bot,
       threadId,
@@ -1122,6 +1128,7 @@ export class Kernel {
       revisions: this.revisions,
       broker: this.broker,
       signal,
+      supportsImages,
       childEnv: this.childEnv(),
       // 读最新配置：本轮中途刚勾选“总是允许”的命令也能生效
       // 与“总是允许”的保存共用同一把锁，排在保存之后读，批准后紧接着的同一条命令不会重复询问
@@ -1129,6 +1136,12 @@ export class Kernel {
         withPathLock(this.paths.botJson(bot.id), async () =>
           (await this.loadBotOrThrow(bot.id)).allowedCommands.includes(command),
         ),
+      isExternalAllowed: (tool: ExternalTool) =>
+        withPathLock(this.paths.botJson(bot.id), async () => {
+          const latest = await this.loadBotOrThrow(bot.id);
+          if (tool.source.kind === 'web') return latest.allowWeb === true;
+          return latest.allowedMcpTools.includes(`${tool.source.serverId}/${tool.source.toolName}`);
+        }),
       onAllowlisted: (request) => logAllowlisted(this.db, request),
       diag: this.diag,
     };
@@ -1205,25 +1218,37 @@ export class Kernel {
     this.pendingJobs.add(tracked);
   }
 
-  /** always：批准时“总是允许此命令”，只对可以加入白名单的简单命令生效 */
+  /** always：批准时勾选“总是允许”，按 alwaysKind 写入命令 / 联网 / 单个 MCP 工具的白名单 */
   respondApproval(id: string, approve: boolean, always = false): boolean {
     const request = this.broker.get(id);
     const ok = this.broker.respond(id, approve);
-    if (ok && approve && always && request?.canAlwaysAllow === true && request.command !== undefined) {
-      markAlways(this.db, id);
-      const command = request.command;
-      const saving = withPathLock(this.paths.botJson(request.botId), async () => {
-        const bot = await this.loadBotOrThrow(request.botId);
-        if (bot.allowedCommands.includes(command)) return;
-        bot.allowedCommands = [...bot.allowedCommands, command];
-        await saveBot(this.paths, bot);
-      });
-      const tracked = saving
-        .catch(() => {})
-        .finally(() => {
-          this.pendingJobs.delete(tracked);
+    if (ok && approve && always && request?.canAlwaysAllow === true) {
+      const kind = request.alwaysKind ?? (request.command !== undefined ? 'command' : undefined);
+      if (kind !== undefined) {
+        markAlways(this.db, id);
+        const saving = withPathLock(this.paths.botJson(request.botId), async () => {
+          const bot = await this.loadBotOrThrow(request.botId);
+          if (kind === 'command') {
+            const command = request.command;
+            if (command === undefined || bot.allowedCommands.includes(command)) return;
+            bot.allowedCommands = [...bot.allowedCommands, command];
+          } else if (kind === 'web') {
+            if (bot.allowWeb) return;
+            bot.allowWeb = true;
+          } else {
+            const key = request.mcpToolKey;
+            if (key === undefined || bot.allowedMcpTools.includes(key)) return;
+            bot.allowedMcpTools = [...bot.allowedMcpTools, key];
+          }
+          await saveBot(this.paths, bot);
         });
-      this.pendingJobs.add(tracked);
+        const tracked = saving
+          .catch(() => {})
+          .finally(() => {
+            this.pendingJobs.delete(tracked);
+          });
+        this.pendingJobs.add(tracked);
+      }
     }
     return ok;
   }

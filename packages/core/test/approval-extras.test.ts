@@ -5,6 +5,7 @@ import type { PathClass } from '../src/tools/path-guard.ts';
 import { KernelError } from '../src/kernel.ts';
 import type { CallModel } from '../src/model/client.ts';
 import type { ApprovalRequest } from '../src/approval/broker.ts';
+import type { ExternalTool } from '../src/tools/catalog.ts';
 import { kernelHarness, waitFor, waitIdle } from './kernel-harness.ts';
 
 const cases: ['edits', ToolName, PathClass[], 'allow' | 'ask'][] = [
@@ -75,6 +76,9 @@ test('总是允许：批准时勾选后记入 bot.allowedCommands，同一条命
   const req = requests(h)[0]!;
   assert.equal(req.command, 'node --version');
   assert.equal(req.canAlwaysAllow, true);
+  // 内置工具的请求不带外部工具的新字段
+  assert.equal(req.source, undefined);
+  assert.equal(req.alwaysKind, undefined);
   assert.equal(h.kernel.respondApproval(req.id, true, true), true);
   await waitIdle(h, 1);
   // 白名单是异步落盘的，等它写完再断言，避免负载高时读到旧值
@@ -150,5 +154,97 @@ test('updateBot：approvalMode 接受 edits；allowedCommands 只能是去重后
     h.kernel.updateBot(h.bot.id, { approvalMode: 'yolo' as never }),
     (e) => e instanceof KernelError && e.code === 'invalid',
   );
+  await h.close();
+});
+
+function externalTool(name: string, source: 'web' | 'mcp'): ExternalTool {
+  return {
+    spec: { name, description: name, parameters: { type: 'object', properties: {} } },
+    source:
+      source === 'web'
+        ? { kind: 'web' }
+        : { kind: 'mcp', serverId: 's1', serverName: 'S1', toolName: name },
+    summarize: () => `调用 ${name}`,
+    preview: () => '预览内容',
+    run: async () => ({ content: 'done', isError: false }),
+  };
+}
+
+function externalModel(name: string): CallModel {
+  let n = 0;
+  return async () => {
+    n += 1;
+    if (n % 2 === 1) {
+      return {
+        blocks: [{ type: 'tool_use', id: `tu_${n}`, name, input: {} }],
+        stopReason: 'tool_use',
+        usage: { inputTokens: 1, outputTokens: 1 },
+      };
+    }
+    return { blocks: [{ type: 'text', text: '完成' }], stopReason: 'end', usage: { inputTokens: 1, outputTokens: 1 } };
+  };
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+test('总是允许 MCP 工具：请求字段齐全；批准勾选 always 后写入 allowedMcpTools，再调用不再询问；清空后恢复询问', async () => {
+  const h = await kernelHarness(externalModel('mcp__x'));
+  h.kernel.tools.register({ toolsFor: async () => [externalTool('mcp__x', 'mcp')] });
+  h.kernel.sendMessage(h.threadId, '一');
+  await waitFor(() => requests(h).length === 1);
+  const req = requests(h)[0]!;
+  assert.equal(req.source, 'mcp');
+  assert.equal(req.serverName, 'S1');
+  assert.equal(req.alwaysKind, 'mcp_tool');
+  assert.equal(req.canAlwaysAllow, true);
+  assert.equal(req.tool, 'mcp__x');
+  assert.equal(req.preview, '预览内容');
+
+  assert.equal(h.kernel.respondApproval(req.id, true, true), true);
+  await waitIdle(h, 1);
+  let bot = (await h.kernel.state()).bots.find((b) => b.id === h.bot.id)!;
+  for (let i = 0; i < 200 && !bot.allowedMcpTools.includes('s1/mcp__x'); i++) {
+    await sleep(10);
+    bot = (await h.kernel.state()).bots.find((b) => b.id === h.bot.id)!;
+  }
+  assert.deepEqual(bot.allowedMcpTools, ['s1/mcp__x']);
+
+  h.kernel.sendMessage(h.threadId, '二');
+  await waitIdle(h, 2);
+  assert.equal(requests(h).length, 1);
+  const log = h.kernel.approvalLog({ botId: h.bot.id });
+  assert.equal(log[0]!.decidedBy, 'allowlist');
+  assert.equal(log[0]!.result, 'approved');
+
+  await h.kernel.updateBot(h.bot.id, { allowedMcpTools: [] });
+  h.kernel.sendMessage(h.threadId, '三');
+  await waitFor(() => requests(h).length === 2);
+  h.kernel.respondApproval(requests(h)[1]!.id, false);
+  await waitIdle(h, 3);
+  await h.close();
+});
+
+test('总是允许联网：批准勾选 always 后 allowWeb 为 true，联网工具不再询问', async () => {
+  const h = await kernelHarness(externalModel('web__fetch'));
+  h.kernel.tools.register({ toolsFor: async () => [externalTool('web__fetch', 'web')] });
+  h.kernel.sendMessage(h.threadId, '一');
+  await waitFor(() => requests(h).length === 1);
+  const req = requests(h)[0]!;
+  assert.equal(req.source, 'web');
+  assert.equal(req.alwaysKind, 'web');
+  h.kernel.respondApproval(req.id, true, true);
+  await waitIdle(h, 1);
+  let bot = (await h.kernel.state()).bots.find((b) => b.id === h.bot.id)!;
+  for (let i = 0; i < 200 && !bot.allowWeb; i++) {
+    await sleep(10);
+    bot = (await h.kernel.state()).bots.find((b) => b.id === h.bot.id)!;
+  }
+  assert.equal(bot.allowWeb, true);
+
+  h.kernel.sendMessage(h.threadId, '二');
+  await waitIdle(h, 2);
+  assert.equal(requests(h).length, 1);
   await h.close();
 });

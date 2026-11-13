@@ -6,7 +6,7 @@ import path from 'node:path';
 import { dataPaths } from '../src/paths.ts';
 import { openDb } from '../src/db/db.ts';
 import { createThread, getThread } from '../src/db/threads.ts';
-import { messagesFrom } from '../src/db/messages.ts';
+import { messagesFrom, appendMessage } from '../src/db/messages.ts';
 import { newBot } from '../src/config/config.ts';
 import { MemoryRevisions } from '../src/memory/revisions.ts';
 import { SecretSet, REDACTED } from '../src/secrets/redact.ts';
@@ -23,6 +23,7 @@ import { ThreadQueue } from '../src/agent/queue.ts';
 import type { CallModel } from '../src/model/client.ts';
 import type { ModelRequest } from '../src/model/adapter.ts';
 import type { Block, StoredMessage } from '../src/model/types.ts';
+import { ToolCatalog, type ExternalTool, type TurnToolset } from '../src/tools/catalog.ts';
 import { AbortedError, ModelError } from '../src/model/types.ts';
 import type { KernelEvent } from '../src/events.ts';
 import type { Bot } from '../src/config/types.ts';
@@ -57,7 +58,7 @@ interface Harness {
 
 async function harness(
   model: CallModel,
-  opts: { approvalMode?: 'ask' | 'auto' } = {},
+  opts: { approvalMode?: 'ask' | 'auto'; snapshotTools?: (bot: Bot) => Promise<TurnToolset> } = {},
 ): Promise<Harness> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'minibot-loop-'));
   const paths = dataPaths(root);
@@ -96,6 +97,7 @@ async function harness(
     }),
     makeToolEnv: () => env,
     prepareContext: async (threadId) => messagesFrom(db, threadId, 0),
+    ...(opts.snapshotTools !== undefined ? { snapshotTools: opts.snapshotTools } : {}),
   };
   return {
     root,
@@ -470,4 +472,76 @@ test('系统提示词含人设、工作目录、user.md 全文、主题名与简
   assert.ok(prompt.includes('无简介'));
   assert.ok(prompt.includes('> 简介：'));
   assert.ok(prompt.includes('记住'));
+});
+
+function echoExternalTool(): ExternalTool {
+  return {
+    spec: { name: 'fake__echo', description: '回显', parameters: { type: 'object', properties: {} } },
+    source: { kind: 'mcp', serverId: 's1', serverName: 'S1', toolName: 'echo' },
+    summarize: () => '调用 fake__echo',
+    run: async (input) => ({ content: `echo:${String(input['text'] ?? '')}`, isError: false }),
+  };
+}
+
+test('本轮使用快照：第一次 callModel 后 provider 不再提供，本轮仍执行；下一轮报未知工具', async () => {
+  let available = true;
+  let n = 0;
+  const catalog = new ToolCatalog();
+  catalog.register({ toolsFor: async () => (available ? [echoExternalTool()] : []) });
+  const h = await harness(
+    async () => {
+      n += 1;
+      if (n % 2 === 1) {
+        if (n === 1) available = false;
+        return {
+          blocks: [{ type: 'tool_use', id: `tu_${n}`, name: 'fake__echo', input: { text: 'hi' } }],
+          stopReason: 'tool_use',
+          usage: { inputTokens: 1, outputTokens: 1 },
+        };
+      }
+      return { blocks: [{ type: 'text', text: '完成' }], stopReason: 'end', usage: { inputTokens: 1, outputTokens: 1 } };
+    },
+    { approvalMode: 'auto', snapshotTools: (bot) => catalog.snapshot(bot) },
+  );
+
+  await runTurn(h.deps, h.bot, h.threadId, '第一轮', h.controller.signal);
+  let messages = messagesFrom(h.db, h.threadId, 0);
+  const firstResult = messages.flatMap((m) => m.blocks).find((b) => b.type === 'tool_result');
+  assert.ok(firstResult !== undefined);
+  assert.equal((firstResult as { content: string }).content, 'echo:hi');
+
+  await runTurn(h.deps, h.bot, h.threadId, '第二轮', h.controller.signal);
+  messages = messagesFrom(h.db, h.threadId, 0);
+  const results = messages
+    .flatMap((m) => m.blocks)
+    .filter((b): b is Extract<Block, { type: 'tool_result' }> => b.type === 'tool_result');
+  assert.ok(results.some((r) => r.content.startsWith('未知工具：fake__echo')));
+  h.close();
+});
+
+test('历史里有已消失外部工具的 tool_use / tool_result：原样发送给模型', async () => {
+  const catalog = new ToolCatalog();
+  const h = await harness(
+    async () => ({ blocks: [{ type: 'text', text: '好的' }], stopReason: 'end', usage: { inputTokens: 1, outputTokens: 1 } }),
+    { approvalMode: 'auto', snapshotTools: (bot) => catalog.snapshot(bot) },
+  );
+  appendMessage(h.db, {
+    threadId: h.threadId,
+    role: 'assistant',
+    blocks: [{ type: 'tool_use', id: 'tu_old', name: 'old__tool', input: { x: 1 } }],
+    kind: null,
+    interrupted: false,
+  });
+  appendMessage(h.db, {
+    threadId: h.threadId,
+    role: 'user',
+    blocks: [{ type: 'tool_result', toolUseId: 'tu_old', content: '旧结果', status: 'ok' }],
+    kind: null,
+    interrupted: false,
+  });
+  await runTurn(h.deps, h.bot, h.threadId, '继续', h.controller.signal);
+  const sent = h.calls[0]!.messages;
+  assert.ok(sent.some((m) => m.blocks.some((b) => b.type === 'tool_use' && b.name === 'old__tool')));
+  assert.ok(sent.some((m) => m.blocks.some((b) => b.type === 'tool_result' && b.toolUseId === 'tu_old')));
+  h.close();
 });

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { decide, type ToolName } from '../src/approval/policy.ts';
+import { decide, decideExternal, type ToolName } from '../src/approval/policy.ts';
 import { ApprovalBroker, type ApprovalEvent } from '../src/approval/broker.ts';
 import type { PathClass } from '../src/tools/path-guard.ts';
 
@@ -20,6 +20,20 @@ const cases: [('ask' | 'auto'), ToolName, PathClass[], 'allow' | 'ask'][] = [
 test('审批矩阵（spec §8.1）', () => {
   for (const [mode, tool, classes, expected] of cases) {
     assert.equal(decide(mode, tool, classes), expected, `${mode} ${tool} ${classes}`);
+  }
+});
+
+test('外部工具审批矩阵：web 只 ask 档问；mcp 除 auto 外都要问', () => {
+  const matrix: [('ask' | 'edits' | 'auto'), 'web' | 'mcp', 'allow' | 'ask'][] = [
+    ['ask', 'web', 'ask'],
+    ['edits', 'web', 'allow'],
+    ['auto', 'web', 'allow'],
+    ['ask', 'mcp', 'ask'],
+    ['edits', 'mcp', 'ask'],
+    ['auto', 'mcp', 'allow'],
+  ];
+  for (const [mode, kind, expected] of matrix) {
+    assert.equal(decideExternal(mode, kind), expected, `${mode} ${kind}`);
   }
 });
 

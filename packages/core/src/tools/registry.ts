@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import type { Bot } from '../config/types.ts';
 import type { DataPaths } from '../paths.ts';
 import type { ApprovalBroker, ApprovalRequestInput } from '../approval/broker.ts';
-import { decide, isSimpleCommand, type ToolName } from '../approval/policy.ts';
+import { decide, decideExternal, isSimpleCommand, type ToolName } from '../approval/policy.ts';
 import { CANCELLED_TEXT } from '../db/messages.ts';
 import type { MemoryRevisions } from '../memory/revisions.ts';
 import type { SecretSet } from '../secrets/redact.ts';
@@ -13,6 +13,8 @@ import type { ReadTracker } from './read-tracker.ts';
 import { readFile, writeFile, editFile } from './files.ts';
 import { globFiles, grepFiles } from './search.ts';
 import { runCommand } from './run-command.ts';
+import { clipToOutputs } from './output.ts';
+import type { ExternalTool, TurnToolset } from './catalog.ts';
 import type { ToolOutput } from './types.ts';
 import type { DiagLog } from '../diag/log.ts';
 
@@ -107,10 +109,16 @@ export interface ToolEnv {
   revisions: MemoryRevisions;
   broker: ApprovalBroker;
   signal: AbortSignal;
+  /** 本轮工具快照；内置工具不需要它，外部工具靠它找实现 */
+  toolset?: TurnToolset;
+  /** 当前模型是否支持图片，作为 ExternalCallContext.supportsImages */
+  supportsImages?: boolean;
   /** run_command 子进程的环境变量；不给则继承内核进程的环境 */
   childEnv?: NodeJS.ProcessEnv;
   /** 命令是否在“总是允许”名单里；内核读最新的 bot 配置，不给时用 bot.allowedCommands */
   isCommandAllowed?: (command: string) => Promise<boolean>;
+  /** 外部工具是否已在“总是允许”名单里（联网看 allowWeb，MCP 看 allowedMcpTools） */
+  isExternalAllowed?: (tool: ExternalTool) => Promise<boolean>;
   /** 命中“总是允许”名单而跳过审批时调用，用于决策日志 */
   onAllowlisted?: (request: ApprovalRequestInput) => void;
   /** 本地日志与诊断事件；不给则不记录 */
@@ -230,13 +238,16 @@ const KNOWN_TOOLS = new Set(TOOL_SPECS.map((t) => t.name));
 function reportTool(diag: DiagLog, call: Extract<Block, { type: 'tool_use' }>, env: ToolEnv, result: ToolResultBlock, durationMs: number): void {
   diag.addWorkspace(env.workspace);
   const input = isRecord(call.input) ? call.input : {};
-  const exit = call.name === 'run_command' ? /^退出码: (-?\d+)/.exec(result.content) : null;
+  const builtin = KNOWN_TOOLS.has(call.name);
+  const external = builtin ? undefined : env.toolset?.external(call.name);
+  const exit = builtin && call.name === 'run_command' ? /^退出码: (-?\d+)/.exec(result.content) : null;
   const exitCode = exit === null ? undefined : Number(exit[1]);
-  const timedOut = call.name === 'run_command' && /^超时: 是/m.test(result.content);
+  const timedOut = builtin && call.name === 'run_command' && /^超时: 是/m.test(result.content);
   // 参数错误与未知工具是模型的问题，不算应用故障
   const modelMistake = result.status === 'error' && /^(参数错误|未知工具)/.test(result.content);
   const failed = (result.status === 'error' && !modelMistake) || timedOut;
-  const name = KNOWN_TOOLS.has(call.name) ? call.name : 'unknown';
+  // 外部工具只记来源类型（web / mcp），不记 server 名、URL、参数；不认识的外部工具记 unknown
+  const name = builtin ? call.name : external === undefined ? 'unknown' : external.source.kind;
   diag.write(
     failed ? 'error' : 'info',
     'tool',
@@ -247,10 +258,10 @@ function reportTool(diag: DiagLog, call: Extract<Block, { type: 'tool_use' }>, e
       durationMs,
       exitCode,
       timedOut: timedOut || undefined,
-      ...(typeof input['path'] === 'string' ? { path: input['path'] } : {}),
-      ...(typeof input['command'] === 'string' ? { command: input['command'] } : {}),
+      ...(builtin && typeof input['path'] === 'string' ? { path: input['path'] } : {}),
+      ...(builtin && typeof input['command'] === 'string' ? { command: input['command'] } : {}),
       // run_command 的内容含命令输出，不进日志；其他工具的错误文案是固定的
-      ...(failed && call.name !== 'run_command' ? { error: result.content.slice(0, 500) } : {}),
+      ...(failed && builtin && call.name !== 'run_command' ? { error: result.content.slice(0, 500) } : {}),
     },
     failed
       ? {
@@ -260,6 +271,84 @@ function reportTool(diag: DiagLog, call: Extract<Block, { type: 'tool_use' }>, e
         }
       : undefined,
   );
+}
+
+type FailFn = (content: string, status?: ToolResultBlock['status']) => ToolResultBlock;
+
+/** 外部工具的审批请求：tool 填模型看到的工具名，来源只带类型与 server 名，不含参数 */
+function externalRequest(
+  tool: ExternalTool,
+  input: Record<string, unknown>,
+  call: Extract<Block, { type: 'tool_use' }>,
+  env: ToolEnv,
+): ApprovalRequestInput {
+  const previewText = tool.preview?.(input);
+  const preview = previewText === undefined ? undefined : clipPreview(env.secrets.redact(previewText));
+  const source = tool.source;
+  const base: ApprovalRequestInput = {
+    botId: env.bot.id,
+    threadId: env.threadId,
+    tool: call.name,
+    summary: env.secrets.redact(tool.summarize(input)),
+    canAlwaysAllow: true,
+    source: source.kind,
+    ...(preview !== undefined ? { preview } : {}),
+  };
+  if (source.kind === 'mcp') {
+    base.serverName = source.serverName;
+    base.alwaysKind = 'mcp_tool';
+    base.mcpToolKey = `${source.serverId}/${source.toolName}`;
+  } else {
+    base.alwaysKind = 'web';
+  }
+  return base;
+}
+
+/** 外部工具统一路径：校验 → 审批（含“总是允许”）→ 执行 → 截断 → 脱敏 */
+async function runExternalTool(
+  call: Extract<Block, { type: 'tool_use' }>,
+  input: Record<string, unknown>,
+  env: ToolEnv,
+  fail: FailFn,
+): Promise<ToolResultBlock> {
+  const tool = env.toolset?.external(call.name);
+  if (tool === undefined) return fail(`未知工具：${call.name}`);
+  const validationError = tool.validate?.(input) ?? null;
+  if (validationError !== null) return fail(validationError);
+  if (env.signal.aborted) return fail(CANCELLED_TEXT, 'cancelled');
+
+  if (decideExternal(env.bot.approvalMode, tool.source.kind) === 'ask') {
+    const request = externalRequest(tool, input, call, env);
+    // 内核在 bot.json 路径锁里读最新配置：本轮中途刚勾选的“总是允许”也能生效
+    const allowlisted = (await env.isExternalAllowed?.(tool)) ?? false;
+    if (allowlisted) {
+      env.onAllowlisted?.(request);
+    } else {
+      const approval = await env.broker.request(request, env.signal);
+      if (approval === 'denied') return fail('用户拒绝了此操作', 'denied');
+      if (approval === 'cancelled') return fail(CANCELLED_TEXT, 'cancelled');
+    }
+  }
+
+  try {
+    const output = await tool.run(input, {
+      bot: env.bot,
+      threadId: env.threadId,
+      signal: env.signal,
+      supportsImages: env.supportsImages ?? true,
+    });
+    if (env.signal.aborted) return fail(CANCELLED_TEXT, 'cancelled');
+    const clipped = await clipToOutputs(output.content, env.paths.outputs);
+    return {
+      type: 'tool_result',
+      toolUseId: call.id,
+      content: env.secrets.redact(clipped),
+      status: output.isError ? 'error' : 'ok',
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return fail(`工具执行失败：${message}`);
+  }
 }
 
 async function runTool(
@@ -276,6 +365,7 @@ async function runTool(
   try {
     const input = call.input;
     if (!isRecord(input)) return fail('参数错误：input 必须是对象。');
+    if (!KNOWN_TOOLS.has(call.name)) return await runExternalTool(call, input, env, fail);
     const validationError = validateParams(call.name, input);
     if (validationError !== null) return fail(validationError);
     if (env.signal.aborted) return fail(CANCELLED_TEXT, 'cancelled');
