@@ -18,6 +18,7 @@
 ![Electron](https://img.shields.io/badge/Electron-Windows-2B2E3A?logo=electron&logoColor=9FEAF9)
 ![Android](https://img.shields.io/badge/Android-8.0%2B-3DDC84?logo=android&logoColor=white)
 ![Node](https://img.shields.io/badge/Node-24-5FA04E?logo=nodedotjs&logoColor=white)
+![License](https://img.shields.io/badge/license-Apache%202.0-blue)
 [![Release](https://img.shields.io/github/v/release/JiaMingWang-CN/minibot?label=release&color=1c1c1c&cacheSeconds=300)](https://github.com/JiaMingWang-CN/minibot/releases/latest)
 
 <br>
@@ -192,4 +193,6 @@ npm run pack       # 构建并打 Windows 安装包 → apps/desktop/release/
 
 ## 许可证
 
-尚未选择开源许可证。在仓库加入 `LICENSE` 之前，代码版权归作者所有。
+[Apache License 2.0](LICENSE) © 2026 JiaMingWang-CN 与 minibot 贡献者。可以自由使用、修改和商用，分发时保留 [LICENSE](LICENSE) 与 [NOTICE](NOTICE)。
+
+许可证不包含商标授权：fork 或改版后发布，请换用自己的名称与图标，不要以 minibot 的名义发布。
