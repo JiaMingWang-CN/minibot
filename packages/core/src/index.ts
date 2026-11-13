@@ -66,6 +66,7 @@ export {
   type TurnToolset,
 } from './tools/catalog.ts';
 export { clipToOutputs } from './tools/output.ts';
+export type { ExtensionsFile, WebSettings, SearchEngine } from './extensions/store.ts';
 export type { Revision, RevisionSource } from './memory/revisions.ts';
 export { RemoteService, type RemoteStatus, type RemoteConfig, type Device } from './remote/service.ts';
 export {

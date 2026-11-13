@@ -80,6 +80,8 @@ import { SecretStore, type KeyCrypto } from './secrets/store.ts';
 import { ReadTracker } from './tools/read-tracker.ts';
 import type { ToolEnv } from './tools/registry.ts';
 import { ToolCatalog, type ExternalTool } from './tools/catalog.ts';
+import { loadExtensions, saveExtensions, type WebSettings } from './extensions/store.ts';
+import { WebToolProvider } from './web/web-tools.ts';
 import { callModel as defaultCallModel, instrumentCallModel, testConnection, type CallModel } from './model/client.ts';
 import { DiagLog } from './diag/log.ts';
 import { ModelMetrics } from './diag/metrics.ts';
@@ -323,6 +325,9 @@ export class Kernel {
       await saveConfig(this.paths, this.config);
     }
     await this.applyExtensionsMigration();
+    this.tools.register(
+      new WebToolProvider({ loadSettings: async () => (await loadExtensions(this.paths)).web }),
+    );
     this.secretStore.registerEnv(this.envKeyNames());
     this.db = openDb(this.paths.db);
     repairDanglingToolUses(this.db);
@@ -1342,6 +1347,25 @@ export class Kernel {
 
   settings(): { consolidationModel: AppConfig['consolidationModel'] } {
     return { consolidationModel: this.config.consolidationModel };
+  }
+
+  async webSettings(): Promise<WebSettings> {
+    return (await loadExtensions(this.paths)).web;
+  }
+
+  /** 本期只支持网页抓取开关；搜索引擎只能是 none，第 4 期再开放 */
+  async updateWebSettings(patch: { fetchEnabled?: boolean; searchEngine?: WebSettings['searchEngine'] }): Promise<WebSettings> {
+    const file = await loadExtensions(this.paths);
+    if (patch.fetchEnabled !== undefined) {
+      if (typeof patch.fetchEnabled !== 'boolean') throw new KernelError('invalid', 'fetchEnabled 必须是布尔值');
+      file.web.fetchEnabled = patch.fetchEnabled;
+    }
+    if (patch.searchEngine !== undefined) {
+      if (patch.searchEngine !== 'none') throw new KernelError('invalid', '搜索引擎不可用');
+      file.web.searchEngine = 'none';
+    }
+    await saveExtensions(this.paths, file);
+    return file.web;
   }
 
   async updateSettings(s: { consolidationModel: AppConfig['consolidationModel'] }): Promise<void> {

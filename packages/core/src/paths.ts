@@ -4,6 +4,7 @@ import path from 'node:path';
 export interface DataPaths {
   root: string;
   config: string;
+  extensionsJson: string;
   secrets: string;
   userMd: string;
   remoteJson: string;
@@ -28,6 +29,7 @@ export function dataPaths(root: string): DataPaths {
   return {
     root,
     config: path.join(root, 'config.json'),
+    extensionsJson: path.join(root, 'extensions.json'),
     secrets: path.join(root, 'secrets.bin'),
     userMd: path.join(root, 'user.md'),
     remoteJson: path.join(root, 'remote.json'),
