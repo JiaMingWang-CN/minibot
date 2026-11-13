@@ -447,6 +447,15 @@ test('enableForMainBot 只改主 bot；removeFromAllBots 清掉启用与 allowed
     assert.equal(bot.allowedMcpTools.some((key) => key.startsWith('s1/')), false);
     assert.deepEqual(bot.allowedMcpTools, ['s2/y']);
   }
+
+  // 卸载插件 / skill 只动对应启用列表，不碰 MCP 工具白名单，即使 id 恰好与 server id 相同
+  const main = await loadBot(paths, 'main');
+  main.extensions.plugins = ['s2'];
+  await saveBot(paths, main);
+  await k.removeFromAllBots('plugins', 's2');
+  bots = (await k.state()).bots;
+  assert.deepEqual(bots.find((b) => b.id === 'main')!.extensions.plugins, []);
+  assert.deepEqual(bots.find((b) => b.id === 'main')!.allowedMcpTools, ['s2/y']);
   await k.close();
 });
 

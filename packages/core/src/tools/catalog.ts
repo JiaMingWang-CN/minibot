@@ -64,6 +64,8 @@ export class ToolCatalog {
       try {
         tools = await provider.toolsFor(bot);
       } catch {
+        // 某个 provider 出错不影响其他工具；只记来源无关的警告，不记 server 名或错误原文
+        this.diag()?.write('warn', 'tool', 'tool.provider_failed', {});
         continue;
       }
       for (const tool of tools) {

@@ -338,14 +338,17 @@ async function runExternalTool(
       supportsImages: env.supportsImages ?? true,
     });
     if (env.signal.aborted) return fail(CANCELLED_TEXT, 'cancelled');
-    const clipped = await clipToOutputs(output.content, env.paths.outputs);
+    // 先脱敏再截断：写入 outputs 的完整文本不含密钥，截断边界也不会切开密钥
+    const content = await clipToOutputs(env.secrets.redact(output.content), env.paths.outputs);
     return {
       type: 'tool_result',
       toolUseId: call.id,
-      content: env.secrets.redact(clipped),
+      content,
       status: output.isError ? 'error' : 'ok',
     };
   } catch (err) {
+    // 中断时工具多半以抛异常结束：按取消处理，不算执行失败
+    if (env.signal.aborted) return fail(CANCELLED_TEXT, 'cancelled');
     const message = err instanceof Error ? err.message : String(err);
     return fail(`工具执行失败：${message}`);
   }

@@ -419,7 +419,7 @@ export class Kernel {
     });
   }
 
-  /** 卸载 / 删除扩展：从所有 bot 的启用列表以及 MCP 工具白名单里移除 */
+  /** 卸载 / 删除扩展：从所有 bot 的启用列表里移除；删除 MCP server 时同时清掉它在 MCP 工具白名单里的条目 */
   async removeFromAllBots(kind: keyof Omit<BotExtensions, 'web'>, id: string): Promise<void> {
     for (const bot of await this.bots()) {
       await withPathLock(this.paths.botJson(bot.id), async () => {
@@ -429,7 +429,10 @@ export class Kernel {
           current.extensions[kind] = current.extensions[kind].filter((x) => x !== id);
           changed = true;
         }
-        const allowed = current.allowedMcpTools.filter((key) => !key.startsWith(`${id}/`));
+        const allowed =
+          kind === 'mcpServers'
+            ? current.allowedMcpTools.filter((key) => !key.startsWith(`${id}/`))
+            : current.allowedMcpTools;
         if (allowed.length !== current.allowedMcpTools.length) {
           current.allowedMcpTools = allowed;
           changed = true;

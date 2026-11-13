@@ -270,3 +270,48 @@ test('外部工具名与内置工具同名时，执行仍走内置逻辑', async
   close();
 });
 
+
+test('内置请求不变：run_command 的审批请求不含 source、alwaysKind 等新字段', async () => {
+  const { env, broker, close } = await setup();
+  env.bot.approvalMode = 'ask';
+  const promise = executeTool(call('run_command', { command: 'echo hi' }), env);
+  const request = await waitForPending(broker);
+  for (const field of ['source', 'serverName', 'alwaysKind', 'mcpToolKey']) {
+    assert.equal(field in request, false, field);
+  }
+  broker.respond(request.id, false);
+  await promise;
+  close();
+});
+
+test('外部工具执行中被中断并抛异常 → 状态 cancelled，不算失败', async () => {
+  const controller = new AbortController();
+  const { env, close } = await setupExternal([
+    externalTool('fake__slow', async (_input, ctx) => {
+      controller.abort();
+      throw ctx.signal.reason instanceof Error ? ctx.signal.reason : new Error('aborted');
+    }),
+  ]);
+  env.signal = controller.signal;
+  const result = await executeTool(call('fake__slow', {}), env);
+  assert.equal(result.status, 'cancelled');
+  assert.equal(result.content.startsWith('工具执行失败'), false);
+  close();
+});
+
+test('外部工具超长结果先脱敏再截断：outputs 文件与截断边界都不含密钥', async () => {
+  const key = 'sk-external-secret-boundary-123456';
+  // 让密钥正好跨过保留的头部边界（15000）
+  const head = 'x'.repeat(15000 - 10);
+  const text = `${head}${key}${'y'.repeat(40000)}`;
+  const { paths, env, close } = await setupExternal([
+    externalTool('fake__bigleak', async () => ({ content: text, isError: false })),
+  ]);
+  env.secrets.add(key);
+  const result = await executeTool(call('fake__bigleak', {}), env);
+  assert.equal(result.content.includes(key.slice(0, 10)), false);
+  const files = await fs.readdir(paths.outputs);
+  const saved = await fs.readFile(path.join(paths.outputs, files[0]!), 'utf8');
+  assert.equal(saved.includes(key), false);
+  close();
+});

@@ -44,3 +44,19 @@ test('已收录的外部工具重名时丢弃后一个', async () => {
   const toolset = await catalog.snapshot(newBot('b1'));
   assert.equal(toolset.specs.filter((s) => s.name === 'dup__x').length, 1);
 });
+
+test('provider 抛异常：跳过它并写一条 warn 日志，其他 provider 照常', async () => {
+  const writes: unknown[][] = [];
+  const diag = { write: (...args: unknown[]) => writes.push(args) } as never;
+  const catalog = new ToolCatalog(() => diag);
+  catalog.register({
+    toolsFor: async () => {
+      throw new Error('连接失败');
+    },
+  });
+  catalog.register(provider([externalTool('ok__x')]));
+  const toolset = await catalog.snapshot(newBot('b1'));
+  assert.equal(toolset.external('ok__x')?.spec.name, 'ok__x');
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0]![0], 'warn');
+});

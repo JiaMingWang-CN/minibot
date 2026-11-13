@@ -64,10 +64,10 @@
 - `removeFromAllBots`：两个 bot 都启用了 `s1` 且 `allowedMcpTools` 含 `s1/x` → 调用后两者都不含 `s1`，`allowedMcpTools` 也不再含 `s1/` 开头的条目。
 - `updateBot 拒绝坏 extensions`：缺 `skills` 字段 → `invalid`。
 
-- [ ] **Step 1:** 写上述测试；运行 `node --test packages/core/test/config.test.ts packages/core/test/kernel.test.ts`，预期 FAIL。
-- [ ] **Step 2:** 按思路与约束实现。
-- [ ] **Step 3:** 再跑同一命令，预期 PASS；跑全量 `node --test "packages/core/test/*.test.ts"` 无回归。
-- [ ] **Step 4:** 提交。
+- [x] **Step 1:** 写上述测试；运行 `node --test packages/core/test/config.test.ts packages/core/test/kernel.test.ts`，预期 FAIL。
+- [x] **Step 2:** 按思路与约束实现。
+- [x] **Step 3:** 再跑同一命令，预期 PASS；跑全量 `node --test "packages/core/test/*.test.ts"` 无回归。
+- [x] **Step 4:** 提交。
 
 ### Task 2: ToolCatalog、每轮快照与外部工具执行路径
 
@@ -113,10 +113,10 @@
 - `外部工具异常`：`run` 抛 `Error('boom')` → 结果 `工具执行失败：boom`，下一轮正常。
 - `历史含消失工具`：历史里有 `old__tool` 的 `tool_use`/`tool_result`，快照里没有它 → `callModel` 收到的 messages 仍包含这两块。
 
-- [ ] **Step 1:** 写上述测试；运行 `node --test packages/core/test/catalog.test.ts packages/core/test/loop.test.ts packages/core/test/registry.test.ts`，预期 FAIL。
-- [ ] **Step 2:** 按思路与约束实现。
-- [ ] **Step 3:** 跑同一命令 PASS，再跑全量无回归；`npm run build --workspace @minibot/core` 通过。
-- [ ] **Step 4:** 提交。
+- [x] **Step 1:** 写上述测试；运行 `node --test packages/core/test/catalog.test.ts packages/core/test/loop.test.ts packages/core/test/registry.test.ts`，预期 FAIL。
+- [x] **Step 2:** 按思路与约束实现。
+- [x] **Step 3:** 跑同一命令 PASS，再跑全量无回归；`npm run build --workspace @minibot/core` 通过。
+- [x] **Step 4:** 提交。
 
 ### Task 3: 外部工具的审批与“总是允许”
 
@@ -151,10 +151,10 @@
 - `撤销后恢复询问`：把 `allowedMcpTools` 清空 → 下一次调用重新询问。
 - `内置请求不变`：`run_command` 的审批请求不含 `source`、`alwaysKind` 等新字段。
 
-- [ ] **Step 1:** 写上述测试；运行 `node --test packages/core/test/approval.test.ts packages/core/test/approval-extras.test.ts`，预期 FAIL。
-- [ ] **Step 2:** 按思路与约束实现，并把 Task 2 里的临时“总是询问”换成这里的判断。
-- [ ] **Step 3:** 跑同一命令 PASS，再跑全量无回归。
-- [ ] **Step 4:** 提交。
+- [x] **Step 1:** 写上述测试；运行 `node --test packages/core/test/approval.test.ts packages/core/test/approval-extras.test.ts`，预期 FAIL。
+- [x] **Step 2:** 按思路与约束实现，并把 Task 2 里的临时“总是询问”换成这里的判断。
+- [x] **Step 3:** 跑同一命令 PASS，再跑全量无回归。
+- [x] **Step 4:** 提交。
 
 ### Task 4: 审批卡片与白名单界面（桌面与手机）
 
@@ -179,7 +179,7 @@
 - 用 Task 2 的假 provider 在 `MINIBOT_HOME` 临时目录下启动桌面端：`ask` 档触发一次外部工具 → 卡片有来源行、勾选文案为“总是允许这个工具”；勾选批准后白名单对话框 MCP 组出现该条，移除后再次触发会询问。截图卡片与对话框。
 - 手机网页层构建通过，`ApprovalBar` 渲染带 `source` 的请求不报错。
 
-- [ ] **Step 1:** 按思路实现。
-- [ ] **Step 2:** 运行 `npm run build --workspace @minibot/renderer`、`npm run build --workspace @minibot/mobile`、`npm run lint`，全部通过；`node --test packages/core/test/i18n-lint.test.ts` 通过。
+- [x] **Step 1:** 按思路实现。
+- [x] **Step 2:** 运行 `npm run build --workspace @minibot/renderer`、`npm run build --workspace @minibot/mobile`、`npm run lint`，全部通过；`node --test packages/core/test/i18n-lint.test.ts` 通过。
 - [ ] **Step 3:** 按验收做手动检查并截图。
-- [ ] **Step 4:** 提交。
+- [x] **Step 4:** 提交。
