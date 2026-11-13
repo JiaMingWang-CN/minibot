@@ -29,6 +29,50 @@ export interface RunProcessResult {
   droppedBytes: number;
 }
 
+/** 列出某进程当前的全部子孙进程（POSIX，用 ps）；失败时返回空数组 */
+export function descendantPids(pid: number): number[] {
+  const result = spawnSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8' });
+  if (result.status !== 0 || typeof result.stdout !== 'string') return [];
+  const children = new Map<number, number[]>();
+  for (const line of result.stdout.split('\n')) {
+    const [a, b] = line.trim().split(/\s+/).map(Number);
+    if (a === undefined || b === undefined || !Number.isInteger(a) || !Number.isInteger(b)) continue;
+    const list = children.get(b) ?? [];
+    list.push(a);
+    children.set(b, list);
+  }
+  const out: number[] = [];
+  const queue = [...(children.get(pid) ?? [])];
+  while (queue.length > 0) {
+    const next = queue.shift()!;
+    if (out.includes(next)) continue;
+    out.push(next);
+    queue.push(...(children.get(next) ?? []));
+  }
+  return out;
+}
+
+/** 逐个结束进程：先 SIGTERM，2 秒后仍在的 SIGKILL */
+export function killPids(pids: number[]): void {
+  for (const pid of pids) {
+    try {
+      process.kill(pid, 'SIGTERM');
+    } catch {
+      // 已退出
+    }
+  }
+  if (pids.length === 0) return;
+  setTimeout(() => {
+    for (const pid of pids) {
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch {
+        // 已退出
+      }
+    }
+  }, 2000).unref();
+}
+
 export function killTree(pid: number, platform: NodeJS.Platform = process.platform): void {
   if (platform === 'win32') {
     spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], {

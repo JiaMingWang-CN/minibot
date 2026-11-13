@@ -5,7 +5,7 @@ import type { OAuthClientProvider, Transport } from '@modelcontextprotocol/clien
 import type { KernelEvent } from '../events.ts';
 import { AbortedError } from '../model/types.ts';
 import type { SecretStore } from '../secrets/store.ts';
-import { killTree } from '../tools/process.ts';
+import { descendantPids, killPids, killTree } from '../tools/process.ts';
 import type { McpServerConfig } from './config.ts';
 import { buildStdioEnv } from './stdio-env.ts';
 import { McpOAuthProvider, startOAuthCallback } from './oauth.ts';
@@ -455,6 +455,10 @@ export class McpManager {
     entry.client = null;
     entry.transport = null;
     const pid = transport instanceof StdioClientTransport ? transport.pid : null;
+    const platform = this.opts.platform ?? process.platform;
+    // POSIX 上 SDK 启动的 server 不是进程组组长，kill(-pid) 杀不到它起的子进程；
+    // 而且关闭后 server 退出，子进程会被托孤。所以先趁 server 还在时记下全部子孙进程。
+    const descendants = pid !== null && pid !== undefined && platform !== 'win32' ? descendantPids(pid) : [];
     try {
       await client?.close();
     } catch {
@@ -465,7 +469,8 @@ export class McpManager {
     } catch {
       // 已经断开
     }
-    if (pid !== null && pid !== undefined) killTree(pid, this.opts.platform ?? process.platform);
+    if (pid !== null && pid !== undefined) killTree(pid, platform);
+    killPids(descendants);
   }
 
   async stop(): Promise<void> {
