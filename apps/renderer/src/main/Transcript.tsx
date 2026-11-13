@@ -163,10 +163,22 @@ export function Transcript({
     if (m.role === 'user') {
       const text = textOf(m.blocks);
       const images = m.blocks.filter((b) => b.type === 'image');
+      const skills = m.blocks.filter((b): b is Extract<Block, { type: 'skill' }> => b.type === 'skill');
       // 只装工具结果的 user 消息不单独显示
-      if (text.length === 0 && images.length === 0) return null;
+      if (text.length === 0 && images.length === 0 && skills.length === 0) return null;
       return (
         <div key={m.id} className="flex animate-msg-in flex-col items-end gap-2">
+          {skills.length > 0 && (
+            <div className="flex flex-col items-end gap-1">
+              {skills.map((b, i) => (
+                <Disclosure key={`skill-${i}`} summary={t('skills.loaded', { name: b.name })}>
+                  <pre className="max-h-80 max-w-[min(36rem,85%)] overflow-auto rounded-lg bg-inset px-3 py-2 font-mono text-[12px] leading-[18px] whitespace-pre-wrap text-ink-secondary">
+                    {b.text}
+                  </pre>
+                </Disclosure>
+              ))}
+            </div>
+          )}
           {images.length > 0 && (
             <div className="flex flex-wrap justify-end gap-2">
               {images.map((b) => b.type === 'image' && <Attachment key={b.id} api={api} id={b.id} />)}

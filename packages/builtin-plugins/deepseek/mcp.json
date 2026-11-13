@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "deepseek": {
+      "command": "${RUNTIME}",
+      "args": ["${PLUGIN_ROOT}/server.mjs"],
+      "env": { "DEEPSEEK_API_KEY": "${config.api_key}" }
+    }
+  }
+}

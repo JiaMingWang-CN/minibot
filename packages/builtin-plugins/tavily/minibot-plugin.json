@@ -1,0 +1,14 @@
+{
+  "name": "tavily",
+  "version": "1.0.0",
+  "description": "Tavily 官方 MCP 搜索",
+  "config": [
+    {
+      "key": "api_key",
+      "title": "API Key",
+      "description": "Tavily API Key；也可以用 Tavily 账号登录",
+      "secret": true,
+      "required": false
+    }
+  ]
+}

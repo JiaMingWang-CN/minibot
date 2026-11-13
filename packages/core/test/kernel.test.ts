@@ -510,3 +510,39 @@ test('contextUsage：无消息时为 0；有基线时为基线 token 加其后�
   await assert.rejects(() => reopened.contextUsage('missing'), KernelError);
   await reopened.close();
 });
+
+async function waitIdleEvents(events: KernelEvent[], threadId: string, n = 1): Promise<void> {
+  const started = Date.now();
+  while (events.filter((e) => e.type === 'turn' && e.threadId === threadId && (e as { state: string }).state === 'idle').length < n) {
+    if (Date.now() - started > 5000) throw new Error('等待超时');
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
+
+test('点名 skill：存进历史，首块为 skill 块、其后为文字块；不可用被拒', async () => {
+  const h = await kernelHarness();
+  try {
+    const paths = dataPaths(h.root);
+    const skillDir = path.join(paths.skillsDir, 'pdf-tools');
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(path.join(skillDir, 'SKILL.md'), '---\nname: pdf-tools\ndescription: 处理 PDF\n---\n\n正文内容\n');
+    await h.kernel.updateBot(h.bot.id, { extensions: { ...h.bot.extensions, skills: ['user:pdf-tools'] } });
+
+    await h.kernel.sendMessageWithSkills(h.threadId, '帮我处理', [], ['pdf-tools']);
+    await waitIdleEvents(h.events, h.threadId);
+    const messages = h.kernel.listMessages(h.threadId, undefined, 100);
+    const user = messages.find((m) => m.role === 'user')!;
+    assert.equal(user.blocks[0]!.type, 'skill');
+    assert.equal((user.blocks[0] as { name: string }).name, 'pdf-tools');
+    assert.equal(user.blocks[1]!.type, 'text');
+
+    const before = h.kernel.listMessages(h.threadId, undefined, 100).length;
+    await assert.rejects(
+      h.kernel.sendMessageWithSkills(h.threadId, '再来', [], ['nope']),
+      (err: unknown) => err instanceof KernelError && err.code === 'invalid' && err.message.includes('skill 不可用：nope'),
+    );
+    assert.equal(h.kernel.listMessages(h.threadId, undefined, 100).length, before);
+  } finally {
+    await h.close();
+  }
+});

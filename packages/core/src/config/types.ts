@@ -81,6 +81,8 @@ export interface Bot {
   allowWeb: boolean;
   /** 审批时勾选“总是允许这个工具”记下的 MCP 工具，条目格式 <serverId>/<原始工具名> */
   allowedMcpTools: string[];
+  /** 该 bot 在已启用插件里单独关掉的 MCP server id 或 skill id */
+  pluginExclusions: string[];
   /** 关闭后不注入记忆主题、不做后台整理 */
   memoryEnabled: boolean;
 }

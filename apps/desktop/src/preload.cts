@@ -4,6 +4,8 @@ contextBridge.exposeInMainWorld('minibot', {
   connection: () => ipcRenderer.invoke('minibot:connection'),
   setTitleBar: (colors: { color: string; symbolColor: string }) => ipcRenderer.send('minibot:title-bar', colors),
   openMemoryDir: (botId: string) => ipcRenderer.invoke('minibot:open-memory-dir', botId),
+  pickFolder: () => ipcRenderer.invoke('minibot:pick-folder'),
+  pickZip: () => ipcRenderer.invoke('minibot:pick-zip'),
   update: {
     state: () => ipcRenderer.invoke('minibot:update-state'),
     check: () => ipcRenderer.invoke('minibot:update-check'),

@@ -15,6 +15,10 @@ export interface DataPaths {
   attachments: string;
   logsDir: string;
   botsDir: string;
+  pluginsDir: string;
+  skillsDir: string;
+  tmpDir: string;
+  cacheDir: string;
   botDir(id: string): string;
   botJson(id: string): string;
   memoryDir(id: string): string;
@@ -40,6 +44,10 @@ export function dataPaths(root: string): DataPaths {
     attachments: path.join(root, 'attachments'),
     logsDir: path.join(root, 'logs'),
     botsDir: path.join(root, 'bots'),
+    pluginsDir: path.join(root, 'plugins'),
+    skillsDir: path.join(root, 'skills'),
+    tmpDir: path.join(root, 'tmp'),
+    cacheDir: path.join(root, 'cache'),
     botDir: (id) => path.join(root, 'bots', id),
     botJson: (id) => path.join(root, 'bots', id, 'bot.json'),
     memoryDir: (id) => path.join(root, 'bots', id, 'memory'),

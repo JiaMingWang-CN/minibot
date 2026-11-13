@@ -108,6 +108,11 @@ export class SecretStore {
     return this.data.get(providerId) ?? null;
   }
 
+  /** 已存的全部键名（不含值） */
+  keys(): string[] {
+    return [...this.data.keys()];
+  }
+
   private async ensureLoaded(): Promise<void> {
     if (!this.loaded) await this.load();
   }

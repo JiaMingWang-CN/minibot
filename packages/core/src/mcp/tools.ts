@@ -7,6 +7,9 @@ import type { McpServerConfig } from './config.ts';
 
 const DEFAULT_SCHEMA: Record<string, unknown> = { type: 'object', properties: {} };
 
+/** 预装搜索插件的 server 由 SearchToolProvider 以 web 来源提供，MCP 侧跳过 */
+const SEARCH_PLUGINS = new Set(['deepseek', 'tavily']);
+
 /** 工具对模型的名字：<shortName>__<tool>，非法字符换 _；超长或冲突时截短并加短哈希 */
 export function toolNameFor(shortName: string, tool: string, taken: Set<string>): string {
   const base = `${shortName}__${tool}`.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -58,13 +61,19 @@ export class McpToolProvider implements ExternalToolProvider {
 
   async toolsFor(bot: Bot): Promise<ExternalTool[]> {
     const enabled = new Set(bot.extensions.mcpServers);
-    if (enabled.size === 0) return [];
+    const pluginSet = new Set(bot.extensions.plugins);
+    const exclusions = new Set(bot.pluginExclusions);
     const configs = await this.loadServers();
     const states = new Map(this.manager.states().map((state) => [state.id, state]));
     const taken = new Set<string>();
     const tools: ExternalTool[] = [];
     for (const config of configs) {
-      if (!enabled.has(config.id)) continue;
+      if (config.origin.kind === 'plugin' && SEARCH_PLUGINS.has(config.origin.pluginId)) continue;
+      const isEnabled =
+        config.origin.kind === 'plugin'
+          ? pluginSet.has(config.origin.pluginId) && !exclusions.has(config.id)
+          : enabled.has(config.id);
+      if (!isEnabled) continue;
       const state = states.get(config.id);
       if (state === undefined || state.status !== 'connected') continue;
       for (const info of state.tools) {

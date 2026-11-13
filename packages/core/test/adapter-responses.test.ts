@@ -172,3 +172,15 @@ test('response.incomplete(max_output_tokens) → max_tokens', async () => {
   assert.equal(result.stopReason, 'max_tokens');
   assert.deepEqual(result.blocks, [{ type: 'text', text: '截断' }]);
 });
+
+test('skill 块作为用户文本发送：以「已加载 skill：」开头', () => {
+  const msg: StoredMessage = {
+    id: 9991, threadId: 't', role: 'user', kind: null, interrupted: false, createdAt: 0,
+    blocks: [{ type: 'skill', name: 'pdf-tools', text: 'skill 目录：/x\n\n正文' }],
+  };
+  const body = bodyOf([msg]);
+  const input = body['input'] as { role?: string; content?: { type: string; text?: string }[] }[];
+  const user = input.find((m) => m.role === 'user')!;
+  const text = (user.content ?? []).map((c) => c.text ?? '').join('');
+  assert.ok(text.startsWith('已加载 skill：pdf-tools'));
+});

@@ -24,6 +24,13 @@ import type {
   Thread,
   ThreadUsage,
   WebSettings,
+  InstallSource,
+  InstallPreview,
+  UpdatePreview,
+  MarketEntry,
+  PluginView,
+  SkillInfo,
+  SkillProblem,
 } from '@minibot/core';
 
 export interface Conn {
@@ -53,6 +60,7 @@ export type BotPatch = Partial<
     | 'extensions'
     | 'allowWeb'
     | 'allowedMcpTools'
+    | 'pluginExclusions'
     | 'memoryEnabled'
   >
 >;
@@ -181,6 +189,26 @@ export function createApi(transport: Transport) {
     mcpRefresh: (id: string) => call<{ ok: true }>('POST', `/api/mcp/servers/${enc(id)}/refresh`),
     mcpLogin: (id: string) => call<{ ok: true }>('POST', `/api/mcp/servers/${enc(id)}/login`),
     mcpLogout: (id: string) => call<{ ok: true }>('POST', `/api/mcp/servers/${enc(id)}/logout`),
+    plugins: () => call<{ plugins: PluginView[] }>('GET', '/api/plugins'),
+    pluginPrepare: (src: InstallSource) => call<InstallPreview>('POST', '/api/plugins/prepare', src),
+    pluginConfirm: (token: string) => call<{ ok: true }>('POST', '/api/plugins/confirm', { token }),
+    pluginCancel: (token: string) => call<{ ok: true }>('POST', '/api/plugins/cancel', { token }),
+    pluginConnect: (name: string, values: Record<string, string>) =>
+      call<{ ok: true }>('POST', `/api/plugins/${enc(name)}/connect`, { values }),
+    pluginSetEnabled: (name: string, enabled: boolean) =>
+      call<{ ok: true }>('PATCH', `/api/plugins/${enc(name)}`, { enabled }),
+    pluginDelete: (name: string) => call<{ ok: true }>('DELETE', `/api/plugins/${enc(name)}`),
+    pluginUpdates: () => call<{ updates: { name: string; current: string; latest: string }[] }>('GET', '/api/plugins/updates'),
+    pluginPrepareUpdate: (name: string) => call<UpdatePreview>('POST', `/api/plugins/${enc(name)}/prepare-update`),
+    pluginConfirmUpdate: (token: string) => call<{ ok: true }>('POST', '/api/plugins/confirm-update', { token }),
+    markets: () => call<{ markets: string[] }>('GET', '/api/markets'),
+    addMarket: (url: string) => call<{ ok: true }>('POST', '/api/markets', { url }),
+    removeMarket: (url: string) => call<{ ok: true }>('DELETE', `/api/markets?url=${enc(url)}`),
+    marketPlugins: (url: string) => call<{ plugins: MarketEntry[] }>('GET', `/api/markets/plugins?url=${enc(url)}`),
+    skills: () => call<{ skills: SkillInfo[]; problems: SkillProblem[] }>('GET', '/api/skills'),
+    addSkill: (dir: string) => call<SkillInfo>('POST', '/api/skills', { dir }),
+    removeSkill: (id: string) => call<{ ok: true }>('DELETE', `/api/skills/${enc(id)}`),
+    botSkills: (botId: string) => call<{ skills: SkillInfo[] }>('GET', `/api/bots/${enc(botId)}/skills`),
     approvalLog: (before?: number, limit = 50) => {
       const search = new URLSearchParams({ limit: String(limit) });
       if (before !== undefined) search.set('before', String(before));
@@ -202,10 +230,11 @@ export function createApi(transport: Transport) {
       if (before !== undefined) search.set('before', String(before));
       return call<StoredMessage[]>('GET', `/api/threads/${enc(threadId)}/messages?${search.toString()}`);
     },
-    sendMessage: (threadId: string, text: string, images: ImageInput[] = []) =>
+    sendMessage: (threadId: string, text: string, images: ImageInput[] = [], skills: string[] = []) =>
       call<{ ok: true; mode: 'turn' | 'steer' }>('POST', `/api/threads/${enc(threadId)}/messages`, {
         text,
         images,
+        ...(skills.length > 0 ? { skills } : {}),
       }),
     retry: (threadId: string) => call<{ ok: true }>('POST', `/api/threads/${enc(threadId)}/retry`),
     compact: (threadId: string) => call<{ ok: true }>('POST', `/api/threads/${enc(threadId)}/compact`),

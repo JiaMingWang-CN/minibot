@@ -57,7 +57,11 @@ export function keepReasoning(
 
 export function textOf(blocks: Block[]): string {
   return blocks
-    .filter((b): b is Extract<Block, { type: 'text' }> => b.type === 'text')
-    .map((b) => b.text)
+    .map((b) => {
+      if (b.type === 'text') return b.text;
+      if (b.type === 'skill') return `已加载 skill：${b.name}\n\n${b.text}`;
+      return null;
+    })
+    .filter((x): x is string => x !== null)
     .join('\n');
 }

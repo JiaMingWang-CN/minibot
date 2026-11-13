@@ -79,13 +79,19 @@ import { SecretSet } from './secrets/redact.ts';
 import { SecretStore, type KeyCrypto } from './secrets/store.ts';
 import { ReadTracker } from './tools/read-tracker.ts';
 import type { ToolEnv } from './tools/registry.ts';
-import { ToolCatalog, type ExternalTool } from './tools/catalog.ts';
+import { ToolCatalog, type ExternalTool, type TurnToolset } from './tools/catalog.ts';
 import { loadExtensions, saveExtensions, type WebSettings } from './extensions/store.ts';
 import { WebToolProvider } from './web/web-tools.ts';
+import { SearchToolProvider, searchServerId } from './web/search-tools.ts';
 import { loadMcpServers, saveMcpServers, materializeServer, parseMcpJson, assertUniqueServerName, type McpServerConfig, type McpServerDraft } from './mcp/config.ts';
 import { McpManager, type McpServerState } from './mcp/manager.ts';
 import { McpToolProvider } from './mcp/tools.ts';
 import { McpOAuthProvider } from './mcp/oauth.ts';
+import { PluginService } from './plugins/registry.ts';
+import { SkillService } from './skills/store.ts';
+import type { SkillInfo } from './skills/skill.ts';
+import { readSkillBody as readSkillBodyFn } from './skills/skill.ts';
+import { formatSkillBody } from './skills/load-skill.ts';
 import { callModel as defaultCallModel, instrumentCallModel, testConnection, type CallModel } from './model/client.ts';
 import { DiagLog } from './diag/log.ts';
 import { ModelMetrics } from './diag/metrics.ts';
@@ -204,6 +210,8 @@ export interface OpenOptions {
   autoUpload?: boolean;
   /** 打开系统浏览器（MCP OAuth 授权页）；桌面端传入 shell.openExternal */
   openExternal?: (url: string) => Promise<void>;
+  /** 预装插件所在目录（应用资源目录）；开发模式为仓库内路径 */
+  builtinPluginsDir?: string;
 }
 
 export interface OnboardingInput {
@@ -268,6 +276,7 @@ export class Kernel {
   private nowFn: () => number;
   private autoUpload: boolean;
   private openExternal: ((url: string) => Promise<void>) | undefined;
+  private builtinPluginsDir: string | undefined;
   private osName = '';
   private metrics!: ModelMetrics;
   private metricsTimer: NodeJS.Timeout | null = null;
@@ -276,6 +285,10 @@ export class Kernel {
   diag!: DiagLog;
   /** MCP 连接管理；init 里创建 */
   mcp!: McpManager;
+  /** 插件登记与连接；init 里创建 */
+  pluginService!: PluginService;
+  /** skill 发现与存储；init 里创建 */
+  skills!: SkillService;
   /** 内置 + 外部工具目录；只读，后续各期在内核里注册 provider */
   readonly tools: ToolCatalog = new ToolCatalog(() => this.diag);
   /** 正在执行一轮对话的线程；此时新消息作为插话 */
@@ -302,6 +315,7 @@ export class Kernel {
     this.nowFn = o.now ?? Date.now;
     this.autoUpload = o.autoUpload ?? true;
     this.openExternal = o.openExternal;
+    this.builtinPluginsDir = o.builtinPluginsDir;
   }
 
   private async init(): Promise<void> {
@@ -339,7 +353,7 @@ export class Kernel {
       new WebToolProvider({ loadSettings: async () => (await loadExtensions(this.paths)).web }),
     );
     this.mcp = new McpManager({
-      loadServers: () => loadMcpServers(this.paths),
+      loadServers: () => this.loadAllServers(),
       enabledServerIds: () => this.mcpServerIdsInUse(),
       secretStore: this.secretStore,
       emit: (e) => this.emit(e),
@@ -355,10 +369,38 @@ export class Kernel {
           ...(this.openExternal !== undefined ? { openExternal: this.openExternal } : {}),
         }),
     });
-    void this.mcp.start();
+    this.pluginService = new PluginService({
+      paths: this.paths,
+      secretStore: this.secretStore,
+      mcp: this.mcp,
+      ...(this.builtinPluginsDir !== undefined ? { builtinPluginsDir: this.builtinPluginsDir } : {}),
+      listBots: () => this.bots(),
+      enableForMainBot: (kind, id) => this.enableForMainBot(kind, id),
+      removeFromAllBots: (kind, id) => this.removeFromAllBots(kind, id),
+      providerKey: (providerId) => {
+        const provider = this.config.providers.find((p) => p.id === providerId);
+        return provider === undefined ? null : this.keyFor(provider);
+      },
+    });
+    await this.pluginService.registerBuiltin();
+    this.skills = new SkillService({
+      paths: this.paths,
+      loadPluginSkillDirs: () => this.pluginService.installedSkillDirs(),
+      enableForMainBot: (kind, id) => this.enableForMainBot(kind, id),
+      removeFromAllBots: (kind, id) => this.removeFromAllBots(kind, id),
+    });
     this.tools.register(
-      new McpToolProvider({ manager: this.mcp, loadServers: () => loadMcpServers(this.paths) }),
+      new McpToolProvider({ manager: this.mcp, loadServers: () => this.loadAllServers() }),
     );
+    this.tools.register(
+      new SearchToolProvider({
+        manager: this.mcp,
+        loadSettings: async () => (await loadExtensions(this.paths)).web,
+        isPluginEnabled: async (name) =>
+          (await this.pluginService.installed()).some((plugin) => plugin.name === name && plugin.enabled),
+      }),
+    );
+    void this.mcp.start();
     this.secretStore.registerEnv(this.envKeyNames());
     this.db = openDb(this.paths.db);
     repairDanglingToolUses(this.db);
@@ -465,26 +507,54 @@ export class Kernel {
           current.extensions[kind] = current.extensions[kind].filter((x) => x !== id);
           changed = true;
         }
-        const allowed =
-          kind === 'mcpServers'
-            ? current.allowedMcpTools.filter((key) => !key.startsWith(`${id}/`))
-            : current.allowedMcpTools;
+        let allowed = current.allowedMcpTools;
+        if (kind === 'mcpServers') allowed = allowed.filter((key) => !key.startsWith(`${id}/`));
+        else if (kind === 'plugins') allowed = allowed.filter((key) => !key.startsWith(`plugin:${id}:`));
         if (allowed.length !== current.allowedMcpTools.length) {
           current.allowedMcpTools = allowed;
           changed = true;
+        }
+        if (kind === 'plugins') {
+          const exclusions = current.pluginExclusions.filter((x) => !x.startsWith(`plugin:${id}:`));
+          if (exclusions.length !== current.pluginExclusions.length) {
+            current.pluginExclusions = exclusions;
+            changed = true;
+          }
         }
         if (changed) await saveBot(this.paths, current);
       });
     }
   }
 
-  /** 至少一个 bot 启用的 MCP server id */
+  /** 合并单独添加的 MCP server 与插件产生的 server，交给 McpManager */
+  private async loadAllServers(): Promise<McpServerConfig[]> {
+    const user = await loadMcpServers(this.paths);
+    const plugin = await this.pluginService.serverConfigs();
+    return [...user, ...plugin];
+  }
+
+  /** 本轮该 bot 可用的 skill：单独启用的 + 插件里未被遮蔽、未被单独关掉的 */
+  private async skillsFor(bot: Bot): Promise<SkillInfo[]> {
+    const { skills } = await this.skills.list();
+    const pluginSet = new Set(bot.extensions.plugins);
+    const excluded = new Set(bot.pluginExclusions);
+    return skills.filter((skill) => {
+      if (skill.shadowed) return false;
+      if (skill.origin.kind === 'user') return bot.extensions.skills.includes(skill.id);
+      return pluginSet.has(skill.origin.pluginName) && !excluded.has(skill.id);
+    });
+  }
+
+  private async snapshotToolsFor(bot: Bot): Promise<TurnToolset> {
+    const skills = await this.skillsFor(bot);
+    return this.tools.snapshot(bot, skills);
+  }
+
+  /** 至少一个 bot 启用的 MCP server id（含插件 server，按 bot 的 pluginExclusions 过滤） */
   private async mcpServerIdsInUse(): Promise<Set<string>> {
-    const ids = new Set<string>();
-    for (const bot of await this.bots()) {
-      for (const id of bot.extensions.mcpServers) ids.add(id);
-    }
-    return ids;
+    const bots = await this.bots();
+    const plugins = await this.pluginService.installed();
+    return this.pluginService.serverIdsInUse(bots, plugins);
   }
 
   /** 把每次模型调用的耗时与成败记入指标聚合，供每小时上报 */
@@ -773,6 +843,7 @@ export class Kernel {
       extensions: { web: true, plugins: [], mcpServers: [], skills: [] },
       allowWeb: false,
       allowedMcpTools: [],
+      pluginExclusions: [],
       memoryEnabled: true,
     };
     const workspace = effectiveWorkspace(this.paths, bot);
@@ -806,6 +877,7 @@ export class Kernel {
         | 'extensions'
         | 'allowWeb'
         | 'allowedMcpTools'
+        | 'pluginExclusions'
         | 'memoryEnabled'
       >
     >,
@@ -847,6 +919,10 @@ export class Kernel {
         throw new KernelError('invalid', 'allowedMcpTools 格式无效');
       }
       bot.allowedMcpTools = [...new Set(patch.allowedMcpTools)];
+    }
+    if (patch.pluginExclusions !== undefined) {
+      if (!isStringArray(patch.pluginExclusions)) throw new KernelError('invalid', 'pluginExclusions 格式无效');
+      bot.pluginExclusions = [...new Set(patch.pluginExclusions)];
     }
     if (patch.memoryEnabled !== undefined) {
       if (typeof patch.memoryEnabled !== 'boolean') throw new KernelError('invalid', 'memoryEnabled 必须是布尔值');
@@ -901,7 +977,7 @@ export class Kernel {
 
     this.diag.addWorkspace(effectiveWorkspace(this.paths, bot));
     await saveBot(this.paths, bot);
-    if (patch.extensions !== undefined) void this.mcp.reconcile();
+    if (patch.extensions !== undefined || patch.pluginExclusions !== undefined) void this.mcp.sync();
     return bot;
   }
 
@@ -986,6 +1062,40 @@ export class Kernel {
     const blocks: Block[] = [];
     if (text.length > 0) blocks.push({ type: 'text', text });
     blocks.push(...this.saveImages(images));
+    return this.deliver(threadId, blocks);
+  }
+
+  /** 发送带点名 skill 的消息：skill 块放在用户文字块之前，一起存进这条用户消息 */
+  async sendMessageWithSkills(
+    threadId: string,
+    text: string,
+    images: ImageInput[],
+    skillNames: string[],
+  ): Promise<'turn' | 'steer'> {
+    const thread = this.threadOrThrow(threadId);
+    if (typeof text !== 'string') throw new KernelError('invalid', 'text 必须是字符串');
+    if (!Array.isArray(images)) throw new KernelError('invalid', 'images 必须是数组');
+    if (!Array.isArray(skillNames)) throw new KernelError('invalid', 'skills 必须是数组');
+    if (text.trim().length === 0 && images.length === 0 && skillNames.length === 0) {
+      throw new KernelError('invalid', '消息不能为空');
+    }
+    const bot = await this.loadBotOrThrow(thread.botId);
+    const available = await this.skillsFor(bot);
+    const byName = new Map(available.map((skill) => [skill.name, skill]));
+    const skillBlocks: Block[] = [];
+    for (const name of skillNames) {
+      const info = byName.get(name);
+      if (info === undefined) throw new KernelError('invalid', `skill 不可用：${name}`);
+      const body = await readSkillBodyFn(info.dir);
+      skillBlocks.push({ type: 'skill', name, text: formatSkillBody(info, body) });
+    }
+    const blocks: Block[] = [...skillBlocks];
+    if (text.length > 0) blocks.push({ type: 'text', text });
+    blocks.push(...this.saveImages(images));
+    return this.deliver(threadId, blocks);
+  }
+
+  private deliver(threadId: string, blocks: Block[]): 'turn' | 'steer' {
     if (this.activeTurns.has(threadId)) {
       const list = this.steer.get(threadId) ?? [];
       list.push(blocks);
@@ -1042,7 +1152,7 @@ export class Kernel {
             emit: (e) => this.emit(e),
             resolveModel: (b) => this.resolveModel(b),
             makeToolEnv: (b, id, s) => this.makeToolEnv(b, id, s),
-            snapshotTools: (b) => this.tools.snapshot(b),
+            snapshotTools: (b) => this.snapshotToolsFor(b),
             prepareContext: this.prepareContext,
             takeSteer: (id) => {
               const items = this.steer.get(id) ?? [];
@@ -1394,7 +1504,7 @@ export class Kernel {
     return (await loadExtensions(this.paths)).web;
   }
 
-  /** 本期只支持网页抓取开关；搜索引擎只能是 none，第 4 期再开放 */
+  /** 更新联网设置；搜索引擎只能选已连接的预装搜索插件 */
   async updateWebSettings(patch: { fetchEnabled?: boolean; searchEngine?: WebSettings['searchEngine'] }): Promise<WebSettings> {
     // 读改写在同一把锁里，桌面和手机同时修改不丢更新
     return withPathLock(this.paths.extensionsJson, async () => {
@@ -1404,8 +1514,18 @@ export class Kernel {
         file.web.fetchEnabled = patch.fetchEnabled;
       }
       if (patch.searchEngine !== undefined) {
-        if (patch.searchEngine !== 'none') throw new KernelError('invalid', '搜索引擎不可用');
-        file.web.searchEngine = 'none';
+        const engine = patch.searchEngine;
+        if (engine !== 'none' && engine !== 'deepseek' && engine !== 'tavily') {
+          throw new KernelError('invalid', '搜索引擎不可用');
+        }
+        if (engine !== 'none') {
+          const plugin = (await this.pluginService.installed()).find((p) => p.name === engine);
+          const state = this.mcp.states().find((s) => s.id === searchServerId(engine));
+          if (plugin === undefined || !plugin.enabled || state?.status !== 'connected') {
+            throw new KernelError('invalid', '所选搜索引擎尚未连接');
+          }
+        }
+        file.web.searchEngine = engine;
       }
       await saveExtensions(this.paths, file);
       return file.web;
@@ -1513,6 +1633,132 @@ export class Kernel {
 
   async logoutMcpServer(id: string): Promise<void> {
     await this.mcp.logout(id);
+  }
+
+  // —— 插件与市场（第 4 期）——
+
+  private invalid(err: unknown): KernelError {
+    return new KernelError('invalid', err instanceof Error ? err.message : String(err));
+  }
+
+  async pluginList(): Promise<Awaited<ReturnType<PluginService['list']>>> {
+    return this.pluginService.list();
+  }
+
+  async pluginPrepare(src: Parameters<PluginService['prepareInstall']>[0]): Promise<Awaited<ReturnType<PluginService['prepareInstall']>>> {
+    try {
+      return await this.pluginService.prepareInstall(src);
+    } catch (err) {
+      throw this.invalid(err);
+    }
+  }
+
+  async pluginConfirm(token: string): Promise<void> {
+    try {
+      await this.pluginService.confirmInstall(token);
+    } catch (err) {
+      throw this.invalid(err);
+    }
+  }
+
+  async pluginCancel(token: string): Promise<void> {
+    await this.pluginService.cancelInstall(token);
+  }
+
+  async pluginConnect(name: string, values: Record<string, string>): Promise<void> {
+    try {
+      await this.pluginService.connect(name, values);
+    } catch (err) {
+      throw this.invalid(err);
+    }
+  }
+
+  async pluginSetEnabled(name: string, enabled: boolean): Promise<void> {
+    try {
+      await this.pluginService.setEnabled(name, enabled);
+    } catch (err) {
+      throw this.invalid(err);
+    }
+  }
+
+  async pluginDelete(name: string): Promise<void> {
+    try {
+      await this.pluginService.uninstall(name);
+    } catch (err) {
+      throw this.invalid(err);
+    }
+  }
+
+  async pluginCheckUpdates(): Promise<{ name: string; current: string; latest: string }[]> {
+    return this.pluginService.checkUpdates();
+  }
+
+  async pluginPrepareUpdate(name: string): Promise<Awaited<ReturnType<PluginService['prepareUpdate']>>> {
+    try {
+      return await this.pluginService.prepareUpdate(name);
+    } catch (err) {
+      throw this.invalid(err);
+    }
+  }
+
+  async pluginConfirmUpdate(token: string): Promise<void> {
+    try {
+      await this.pluginService.confirmUpdate(token);
+    } catch (err) {
+      throw this.invalid(err);
+    }
+  }
+
+  async markets(): Promise<string[]> {
+    return this.pluginService.markets();
+  }
+
+  async addMarket(url: string): Promise<void> {
+    try {
+      await this.pluginService.addMarket(url);
+    } catch (err) {
+      throw this.invalid(err);
+    }
+  }
+
+  async removeMarket(url: string): Promise<void> {
+    await this.pluginService.removeMarket(url);
+  }
+
+  async marketPlugins(url: string): Promise<Awaited<ReturnType<PluginService['listMarket']>>> {
+    try {
+      return await this.pluginService.listMarket(url);
+    } catch (err) {
+      throw this.invalid(err);
+    }
+  }
+
+  // —— Skill（第 5 期）——
+
+  async skillList(): Promise<Awaited<ReturnType<SkillService['list']>>> {
+    return this.skills.list();
+  }
+
+  async addSkill(dir: string): Promise<SkillInfo> {
+    try {
+      return await this.skills.add(dir);
+    } catch (err) {
+      throw this.invalid(err);
+    }
+  }
+
+  async removeSkill(id: string): Promise<void> {
+    try {
+      await this.skills.remove(id);
+    } catch (err) {
+      throw this.invalid(err);
+    }
+  }
+
+  /** 某个 bot 本轮的可用 skill（供 `/` 菜单） */
+  async botSkills(botId: string): Promise<SkillInfo[]> {
+    const bot = await this.loadBotOrThrow(botId);
+    return this.skillsFor(bot);
   }
 
   async updateSettings(s: { consolidationModel: AppConfig['consolidationModel'] }): Promise<void> {

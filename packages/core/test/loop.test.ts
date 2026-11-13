@@ -519,6 +519,26 @@ test('本轮使用快照：第一次 callModel 后 provider 不再提供，本�
   h.close();
 });
 
+test('有 skill 时系统提示含摘要与约定，工具列表含 load_skill', async () => {
+  const catalog = new ToolCatalog();
+  const h = await harness(
+    async () => ({ blocks: [{ type: 'text', text: '好的' }], stopReason: 'end', usage: { inputTokens: 1, outputTokens: 1 } }),
+    {
+      approvalMode: 'auto',
+      snapshotTools: (bot) =>
+        catalog.snapshot(bot, [
+          { id: 'user:pdf-tools', name: 'pdf-tools', description: '处理 PDF', dir: '/tmp/pdf-tools', origin: { kind: 'user' }, shadowed: false },
+        ]),
+    },
+  );
+  await runTurn(h.deps, h.bot, h.threadId, '做点事', h.controller.signal);
+  const request = h.calls[0]!;
+  assert.ok(request.system.includes('- pdf-tools：处理 PDF'));
+  assert.ok(request.system.includes('先调用 load_skill'));
+  assert.ok((request.tools ?? []).some((t) => t.name === 'load_skill'));
+  h.close();
+});
+
 test('历史里有已消失外部工具的 tool_use / tool_result：原样发送给模型', async () => {
   const catalog = new ToolCatalog();
   const h = await harness(

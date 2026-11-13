@@ -1,6 +1,8 @@
 import type { Bot } from '../config/types.ts';
 import type { DiagLog } from '../diag/log.ts';
 import type { ToolSpec } from '../model/adapter.ts';
+import type { SkillInfo } from '../skills/skill.ts';
+import { LOAD_SKILL_SPEC } from '../skills/load-skill.ts';
 import { TOOL_SPECS } from './registry.ts';
 import type { ToolOutput } from './types.ts';
 
@@ -34,10 +36,11 @@ export interface ExternalToolProvider {
   toolsFor(bot: Bot): Promise<ExternalTool[]>;
 }
 
-/** 本轮工具快照：specs 是我们交给模型的完整列表，external 用来找非内置工具的实现 */
+/** 本轮工具快照：specs 是我们交给模型的完整列表，external 用来找非内置工具的实现，skills 是本轮可用的 skill */
 export interface TurnToolset {
   specs: ToolSpec[];
   external(name: string): ExternalTool | undefined;
+  skills: SkillInfo[];
 }
 
 const BUILTIN_NAMES = new Set(TOOL_SPECS.map((t) => t.name));
@@ -55,8 +58,9 @@ export class ToolCatalog {
     this.providers.push(provider);
   }
 
-  /** 内置工具在前，随后按注册顺序合并各 provider 的工具；重名（内置或已收录的外部工具）丢弃 */
-  async snapshot(bot: Bot): Promise<TurnToolset> {
+  /** 内置工具在前，随后按注册顺序合并各 provider 的工具；重名（内置或已收录的外部工具）丢弃。
+   *  有可用 skill 时追加内置工具 load_skill。 */
+  async snapshot(bot: Bot, skills: SkillInfo[] = []): Promise<TurnToolset> {
     const specs: ToolSpec[] = [...TOOL_SPECS];
     const external = new Map<string, ExternalTool>();
     for (const provider of this.providers) {
@@ -79,6 +83,7 @@ export class ToolCatalog {
         specs.push(tool.spec);
       }
     }
-    return { specs, external: (name: string) => external.get(name) };
+    if (skills.length > 0) specs.push(LOAD_SKILL_SPEC);
+    return { specs, external: (name: string) => external.get(name), skills };
   }
 }

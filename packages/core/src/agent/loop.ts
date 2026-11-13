@@ -156,7 +156,7 @@ export async function runTurn(
     // 本轮工具快照：开头取一次，本轮不再重新取；用户中途开关扩展下一轮才生效
     const toolset: TurnToolset =
       deps.snapshotTools === undefined
-        ? { specs: TOOL_SPECS, external: () => undefined }
+        ? { specs: TOOL_SPECS, external: () => undefined, skills: [] }
         : await deps.snapshotTools(bot);
     env.toolset = toolset;
     let userMd = '';
@@ -173,6 +173,7 @@ export async function runTurn(
       userMdPath: env.paths.userMd,
       memoryDir: env.paths.memoryDir(bot.id),
       topics: topics.map((t) => ({ name: t.name, summary: t.summary })),
+      skills: toolset.skills.map((s) => ({ name: s.name, description: s.description })),
       platform: process.platform,
       now: new Date(),
     });

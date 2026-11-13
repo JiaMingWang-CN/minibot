@@ -66,6 +66,8 @@ function anthropicBody(req: ModelRequest): Record<string, unknown> {
       for (const block of message.blocks) {
         if (block.type === 'text' && block.text.length > 0) {
           content.push({ type: 'text', text: block.text });
+        } else if (block.type === 'skill') {
+          content.push({ type: 'text', text: `已加载 skill：${block.name}\n\n${block.text}` });
         } else if (block.type === 'image') {
           const data = req.attachments?.[block.id];
           content.push(

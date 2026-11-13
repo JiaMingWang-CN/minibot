@@ -11,6 +11,12 @@
   "asarUnpack": [
     "**/node_modules/@vscode/ripgrep/bin/**"
   ],
+  "extraResources": [
+    {
+      "from": "../../packages/builtin-plugins",
+      "to": "builtin-plugins"
+    }
+  ],
   "icon": "static/assets/icon.png",
   "win": {
     "target": [

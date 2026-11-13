@@ -1,0 +1,16 @@
+{
+  "name": "ok-plugin",
+  "version": "1.0.0",
+  "description": "测试用的合规插件",
+  "author": "minibot",
+  "homepage": "https://example.com/ok-plugin",
+  "config": [
+    {
+      "key": "TOKEN",
+      "title": "访问令牌",
+      "description": "连接服务所需的令牌",
+      "secret": true,
+      "required": true
+    }
+  ]
+}

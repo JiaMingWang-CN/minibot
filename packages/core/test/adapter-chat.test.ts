@@ -185,3 +185,20 @@ test('notice 消息不发给模型', () => {
   };
   assert.deepEqual(historyForModel([user('hi'), emptyAssistant, notice]).map((m) => m.role), ['user']);
 });
+
+test('skill 块作为用户文本发送：以「已加载 skill：」开头', () => {
+  const msg: StoredMessage = {
+    id: nextId++, threadId: 't', role: 'user', kind: null, interrupted: false, createdAt: 0,
+    blocks: [
+      { type: 'skill', name: 'pdf-tools', text: 'skill 目录：/x\n\n正文' },
+      { type: 'text', text: '帮我处理' },
+    ],
+  };
+  const body = bodyOf([msg]);
+  const messages = body['messages'] as { role: string; content: unknown }[];
+  const user = messages.find((m) => m.role === 'user')!;
+  assert.equal(typeof user.content, 'string');
+  assert.ok((user.content as string).startsWith('已加载 skill：pdf-tools'));
+  assert.ok((user.content as string).includes('正文'));
+  assert.ok((user.content as string).includes('帮我处理'));
+});

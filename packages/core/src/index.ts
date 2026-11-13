@@ -69,6 +69,13 @@ export { clipToOutputs } from './tools/output.ts';
 export type { ExtensionsFile, WebSettings, SearchEngine } from './extensions/store.ts';
 export type { McpServerConfig, McpServerDraft, McpTransportConfig, McpTransportDraft, McpValue, McpDraftValue } from './mcp/config.ts';
 export type { McpStatus, McpServerState, McpToolInfo, McpContent, McpCallResult } from './mcp/manager.ts';
+export type { InstalledPlugin, PluginView, PluginStatus, PluginSource } from './plugins/registry.ts';
+export type { PluginManifest, PluginConfigField, PluginBundle } from './plugins/manifest.ts';
+export type { InstallSource } from './plugins/sources.ts';
+export type { InstallPreview, InstallPreviewServer } from './plugins/install.ts';
+export type { UpdatePreview, CommandChange } from './plugins/update.ts';
+export type { MarketEntry } from './plugins/market.ts';
+export type { SkillInfo, SkillProblem, SkillOrigin } from './skills/skill.ts';
 export type { Revision, RevisionSource } from './memory/revisions.ts';
 export { RemoteService, type RemoteStatus, type RemoteConfig, type Device } from './remote/service.ts';
 export {

@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import type { Bot } from '../config/types.ts';
 import type { DataPaths } from '../paths.ts';
 import type { ApprovalBroker, ApprovalRequestInput } from '../approval/broker.ts';
-import { decide, decideExternal, isSimpleCommand, type ToolName } from '../approval/policy.ts';
+import { decide, decideExternal, isDirectTool, isSimpleCommand, type ToolName } from '../approval/policy.ts';
 import { CANCELLED_TEXT } from '../db/messages.ts';
 import type { MemoryRevisions } from '../memory/revisions.ts';
 import type { SecretSet } from '../secrets/redact.ts';
@@ -14,6 +14,7 @@ import { readFile, writeFile, editFile } from './files.ts';
 import { globFiles, grepFiles } from './search.ts';
 import { runCommand } from './run-command.ts';
 import { clipToOutputs } from './output.ts';
+import { loadSkill } from '../skills/load-skill.ts';
 import type { ExternalTool, TurnToolset } from './catalog.ts';
 import type { ToolOutput } from './types.ts';
 import type { DiagLog } from '../diag/log.ts';
@@ -238,7 +239,7 @@ const KNOWN_TOOLS = new Set(TOOL_SPECS.map((t) => t.name));
 function reportTool(diag: DiagLog, call: Extract<Block, { type: 'tool_use' }>, env: ToolEnv, result: ToolResultBlock, durationMs: number): void {
   diag.addWorkspace(env.workspace);
   const input = isRecord(call.input) ? call.input : {};
-  const builtin = KNOWN_TOOLS.has(call.name);
+  const builtin = KNOWN_TOOLS.has(call.name) || call.name === 'load_skill';
   const external = builtin ? undefined : env.toolset?.external(call.name);
   const exit = builtin && call.name === 'run_command' ? /^退出码: (-?\d+)/.exec(result.content) : null;
   const exitCode = exit === null ? undefined : Number(exit[1]);
@@ -368,6 +369,16 @@ async function runTool(
   try {
     const input = call.input;
     if (!isRecord(input)) return fail('参数错误：input 必须是对象。');
+    if (isDirectTool(call.name)) {
+      if (env.signal.aborted) return fail(CANCELLED_TEXT, 'cancelled');
+      try {
+        const text = await loadSkill(env.toolset?.skills ?? [], input);
+        const content = await clipToOutputs(env.secrets.redact(text), env.paths.outputs);
+        return { type: 'tool_result', toolUseId: call.id, content, status: 'ok' };
+      } catch (err) {
+        return fail(err instanceof Error ? err.message : String(err));
+      }
+    }
     if (!KNOWN_TOOLS.has(call.name)) return await runExternalTool(call, input, env, fail);
     const validationError = validateParams(call.name, input);
     if (validationError !== null) return fail(validationError);

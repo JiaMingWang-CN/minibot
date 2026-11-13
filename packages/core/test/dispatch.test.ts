@@ -87,13 +87,18 @@ test('PUT 网页抓取：关闭后 GET 返回 false，快照里没有 web_fetch'
   }
 });
 
-test('PUT 非法搜索引擎返回 400', async () => {
+test('PUT 搜索引擎：非法值 400，未连接的引擎 400', async () => {
   const h = await kernelHarness();
   try {
-    const res = await dispatchApi(h.kernel, req('PUT', '/api/extensions/web', { searchEngine: 'tavily' }));
-    assert.equal(res.status, 400);
-    assert.ok('json' in res);
-    assert.equal((res.json as { error: { message: string } }).error.message, '搜索引擎不可用');
+    const invalid = await dispatchApi(h.kernel, req('PUT', '/api/extensions/web', { searchEngine: 'bing' }));
+    assert.equal(invalid.status, 400);
+    assert.ok('json' in invalid);
+    assert.equal((invalid.json as { error: { message: string } }).error.message, '搜索引擎不可用');
+
+    const notConnected = await dispatchApi(h.kernel, req('PUT', '/api/extensions/web', { searchEngine: 'tavily' }));
+    assert.equal(notConnected.status, 400);
+    assert.ok('json' in notConnected);
+    assert.equal((notConnected.json as { error: { message: string } }).error.message, '所选搜索引擎尚未连接');
   } finally {
     await h.close();
   }
@@ -198,6 +203,53 @@ test('MCP 从 JSON 解析', async () => {
     assert.equal(res.status, 200);
     assert.ok('json' in res);
     assert.equal((res.json as { servers: unknown[] }).servers.length, 1);
+  } finally {
+    await h.close();
+  }
+});
+
+test('插件接口：GET /api/plugins 不含 secret；安装→连接→列表', async () => {
+  const { fileURLToPath } = await import('node:url');
+  const okPlugin = fileURLToPath(new URL('./fixtures/plugins/ok-plugin', import.meta.url));
+  const h = await kernelHarness();
+  try {
+    const prepared = await dispatchApi(h.kernel, req('POST', '/api/plugins/prepare', { kind: 'folder', path: okPlugin }));
+    assert.equal(prepared.status, 200);
+    const token = (prepared.json as { token: string }).token;
+    assert.ok(token.length > 0);
+    const confirmed = await dispatchApi(h.kernel, req('POST', '/api/plugins/confirm', { token }));
+    assert.equal(confirmed.status, 200);
+
+    await dispatchApi(h.kernel, req('POST', '/api/plugins/ok-plugin/connect', { values: { TOKEN: 'sk-very-secret-xyz' } }));
+
+    const list = await dispatchApi(h.kernel, req('GET', '/api/plugins'));
+    assert.equal(list.status, 200);
+    const raw = JSON.stringify(list.json);
+    assert.equal(raw.includes('sk-very-secret-xyz'), false);
+    assert.ok((list.json as { plugins: { name: string }[] }).plugins.some((p) => p.name === 'ok-plugin'));
+  } finally {
+    await h.close();
+  }
+});
+
+test('添加 skill 接口：合规 201，不合规 400 并带原因', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'minibot-skills-api-'));
+  const good = path.join(root, 'good-skill');
+  await fs.mkdir(good, { recursive: true });
+  await fs.writeFile(path.join(good, 'SKILL.md'), '---\nname: good-skill\ndescription: 好的\n---\n\n正文\n');
+  const bad = path.join(root, 'bad');
+  await fs.mkdir(bad, { recursive: true });
+  await fs.writeFile(path.join(bad, 'note.txt'), 'x');
+
+  const h = await kernelHarness();
+  try {
+    const created = await dispatchApi(h.kernel, req('POST', '/api/skills', { dir: good }));
+    assert.equal(created.status, 201);
+    const invalid = await dispatchApi(h.kernel, req('POST', '/api/skills', { dir: bad }));
+    assert.equal(invalid.status, 400);
+    if ('json' in invalid) {
+      assert.match((invalid.json as { error: { message: string } }).error.message, /缺少 SKILL.md/);
+    }
   } finally {
     await h.close();
   }

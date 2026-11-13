@@ -35,6 +35,7 @@ export function newBot(id: string, providerId = '', model = ''): Bot {
     extensions: { web: false, plugins: [], mcpServers: [], skills: [] },
     allowWeb: false,
     allowedMcpTools: [],
+    pluginExclusions: [],
     memoryEnabled: true,
   };
 }
@@ -276,6 +277,7 @@ export function migrate(raw: unknown): AppConfig | Bot {
       extensions: migrateExtensions(raw['extensions']),
       allowWeb: raw['allowWeb'] === true,
       allowedMcpTools: stringArray(raw['allowedMcpTools']),
+      pluginExclusions: stringArray(raw['pluginExclusions']),
       memoryEnabled: raw['memoryEnabled'] !== false,
     };
   }

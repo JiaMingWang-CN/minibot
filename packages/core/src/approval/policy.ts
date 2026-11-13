@@ -39,3 +39,8 @@ export function decideExternal(mode: ApprovalMode, kind: 'web' | 'mcp'): 'allow'
   if (kind === 'web') return mode === 'edits' ? 'allow' : 'ask';
   return 'ask';
 }
+
+/** 内置于内核、直接放行、不经过路径分类与审批的工具（load_skill） */
+export function isDirectTool(name: string): boolean {
+  return name === 'load_skill';
+}

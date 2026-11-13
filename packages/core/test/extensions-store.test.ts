@@ -14,7 +14,7 @@ async function tmpPaths() {
 test('extensions.json 不存在时默认开启抓取、搜索引擎 none', async () => {
   const p = await tmpPaths();
   const f = await loadExtensions(p);
-  assert.deepEqual(f, { schemaVersion: 1, web: { fetchEnabled: true, searchEngine: 'none' }, mcpServers: [] });
+  assert.deepEqual(f, { schemaVersion: 1, web: { fetchEnabled: true, searchEngine: 'none' }, mcpServers: [], plugins: [], markets: [] });
   assert.equal(p.extensionsJson, path.join(p.root, 'extensions.json'));
 });
 

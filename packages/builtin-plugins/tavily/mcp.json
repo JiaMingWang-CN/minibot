@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "tavily": {
+      "url": "https://mcp.tavily.com/mcp/",
+      "headers": { "Authorization": "Bearer ${config.api_key}" }
+    }
+  }
+}

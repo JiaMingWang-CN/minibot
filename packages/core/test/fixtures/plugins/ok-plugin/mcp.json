@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "weather": {
+      "command": "node",
+      "args": ["${PLUGIN_ROOT}/server.js"],
+      "env": { "TOKEN": "${config.TOKEN}" }
+    }
+  }
+}

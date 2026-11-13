@@ -3,7 +3,7 @@
 // 消息列最宽 48rem 居中，输入框胶囊在底部。
 
 import { useCallback, useEffect, useState } from 'react';
-import type { Bot, KernelState, SearchHit, Thread } from '@minibot/core';
+import type { Bot, KernelState, SearchHit, SkillInfo, Thread } from '@minibot/core';
 import { ArrowDown, ShieldAlert, X } from 'lucide-react';
 import type { Subscribe } from '../App';
 import { fileToBase64, type Api, type BotPatch, type EventConnection, type PresetWithModels } from '../api';
@@ -77,6 +77,8 @@ export function MainScreen({
   const [deleting, setDeleting] = useState<Thread | null>(null);
   const [failure, setFailure] = useState<string | null>(secretsUnreadable ? t('app.secretsUnreadable') : null);
   const [diagPrompt, setDiagPrompt] = useState(diagnosticsPrompt);
+  const [skillList, setSkillList] = useState<SkillInfo[]>([]);
+  const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   const update = useUpdateState();
   const [updateDismissed, setUpdateDismissed] = useState(false);
   // 同意状态在别处（初始化、设置页）改过：不要再提示
@@ -110,6 +112,10 @@ export function MainScreen({
     loadOlder,
     refreshThreads,
   } = useConversation({ api, events, subscribe, botId: bot.id, contextWindow: bot.contextWindow, onError: setFailure });
+
+  useEffect(() => {
+    api.botSkills(bot.id).then((r) => setSkillList(r.skills), () => setSkillList([]));
+  }, [api, bot.id]);
 
   // 搜索：输入停顿 250ms 后查询
   useEffect(() => {
@@ -161,13 +167,14 @@ export function MainScreen({
   const send = async (): Promise<void> => {
     if (activeId === null) return;
     const text = draft.trim();
-    if (text.length === 0 && composer.images.length === 0) return;
+    if (text.length === 0 && composer.images.length === 0 && selectedSkills.length === 0) return;
     composer.setError(null);
     try {
       const payload = await Promise.all(composer.images.map(async (i) => ({ mediaType: i.file.type, data: await fileToBase64(i.file) })));
-      const result = await api.sendMessage(activeId, text, payload);
+      const result = await api.sendMessage(activeId, text, payload, selectedSkills);
       composer.clear();
       setDraft('');
+      setSelectedSkills([]);
       setStuck(true);
       if (result.mode === 'steer' && text.length > 0) setSteered((list) => [...list, text]);
     } catch (err) {
@@ -351,6 +358,10 @@ export function MainScreen({
                 onAddImages={composer.add}
                 onRemoveImage={composer.remove}
                 error={composer.error}
+                skills={skillList}
+                selectedSkills={selectedSkills}
+                onPickSkill={(name) => setSelectedSkills((list) => (list.includes(name) ? list : [...list, name]))}
+                onRemoveSkill={(name) => setSelectedSkills((list) => list.filter((x) => x !== name))}
                 tools={
                   <ApprovalModePicker
                     mode={bot.approvalMode}

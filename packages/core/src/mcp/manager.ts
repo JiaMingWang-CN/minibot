@@ -203,6 +203,13 @@ export class McpManager {
     await this.reconcile();
   }
 
+  /** 配置增删改（如插件启停）后重新读取并按启用列表对齐连接 */
+  async sync(): Promise<void> {
+    this.stopping = false;
+    await this.reload();
+    await this.reconcile();
+  }
+
   /** 按 bot 启用列表对齐连接：停用的断开，重新启用的连上 */
   async reconcile(): Promise<void> {
     const enabled = await this.opts.enabledServerIds();

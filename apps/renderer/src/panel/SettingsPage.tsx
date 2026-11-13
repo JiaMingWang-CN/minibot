@@ -2,8 +2,8 @@
 // 布局照 OpenMausBot bot 面板的设置页。
 
 import { useEffect, useState } from 'react';
-import type { ApprovalMode } from '@minibot/core';
-import { FileText, Gauge, Globe, ListChecks, Plug, ShieldCheck, Text } from 'lucide-react';
+import type { ApprovalMode, PluginView, SkillInfo } from '@minibot/core';
+import { FileText, Gauge, Globe, ListChecks, Plug, ShieldCheck, Sparkles, Text } from 'lucide-react';
 import type { McpServerView } from '../api';
 import { cn } from '../lib/cn';
 import { t, type MessageKey } from '../i18n';
@@ -48,8 +48,12 @@ export function SettingsPage({ api, bot, patch, isRunning, onOpenAllowlist }: Pa
   const [persona, setPersona] = useState(bot.persona);
   const [error, setError] = useState<string | null>(null);
   const [mcpServers, setMcpServers] = useState<McpServerView[]>([]);
+  const [plugins, setPlugins] = useState<PluginView[]>([]);
+  const [skills, setSkills] = useState<SkillInfo[]>([]);
   useEffect(() => {
     api.mcpServers().then((r) => setMcpServers(r.servers), () => undefined);
+    api.plugins().then((r) => setPlugins(r.plugins), () => undefined);
+    api.skills().then((r) => setSkills(r.skills), () => undefined);
   }, [api]);
   const run = (job: Promise<void>): void => {
     setError(null);
@@ -60,6 +64,23 @@ export function SettingsPage({ api, bot, patch, isRunning, onOpenAllowlist }: Pa
     const next = current.includes(id) ? current.filter((x) => x !== id) : [...current, id];
     run(patch({ extensions: { ...bot.extensions, mcpServers: next } }));
   };
+  const togglePlugin = (name: string): void => {
+    const current = bot.extensions.plugins;
+    const next = current.includes(name) ? current.filter((x) => x !== name) : [...current, name];
+    run(patch({ extensions: { ...bot.extensions, plugins: next } }));
+  };
+  const toggleExclusion = (id: string): void => {
+    const current = bot.pluginExclusions;
+    const next = current.includes(id) ? current.filter((x) => x !== id) : [...current, id];
+    run(patch({ pluginExclusions: next }));
+  };
+  const toggleSkill = (id: string): void => {
+    const current = bot.extensions.skills;
+    const next = current.includes(id) ? current.filter((x) => x !== id) : [...current, id];
+    run(patch({ extensions: { ...bot.extensions, skills: next } }));
+  };
+  const SEARCH_PLUGINS = new Set(['deepseek', 'tavily']);
+  const userSkills = skills.filter((s) => s.origin.kind === 'user');
 
   return (
     <div className="flex flex-col">
@@ -166,6 +187,52 @@ export function SettingsPage({ api, bot, patch, isRunning, onOpenAllowlist }: Pa
             hint={t(`mcp.status.${server.status}` as MessageKey)}
             checked={bot.extensions.mcpServers.includes(server.id)}
             onChange={() => toggleMcp(server.id)}
+          />
+        ))}
+        {plugins
+          .filter((p) => !SEARCH_PLUGINS.has(p.name))
+          .map((plugin) => (
+            <div key={plugin.name} className="flex flex-col">
+              <SwitchRow
+                icon={Plug}
+                title={plugin.name}
+                hint={t(`plugins.status.${plugin.status}` as MessageKey)}
+                checked={bot.extensions.plugins.includes(plugin.name)}
+                onChange={() => togglePlugin(plugin.name)}
+              />
+              {bot.extensions.plugins.includes(plugin.name) &&
+                plugin.serverIds.map((serverId) => (
+                  <SwitchRow
+                    key={serverId}
+                    title={serverId}
+                    hint={t('panel.pluginExclusions')}
+                    checked={!bot.pluginExclusions.includes(serverId)}
+                    onChange={() => toggleExclusion(serverId)}
+                  />
+                ))}
+              {bot.extensions.plugins.includes(plugin.name) &&
+                skills
+                  .filter((s) => s.origin.kind === 'plugin' && s.origin.pluginName === plugin.name)
+                  .map((skill) => (
+                    <SwitchRow
+                      key={skill.id}
+                      icon={Sparkles}
+                      title={skill.name}
+                      hint={skill.shadowed ? t('skills.conflict') : skill.description}
+                      checked={!bot.pluginExclusions.includes(skill.id)}
+                      onChange={() => toggleExclusion(skill.id)}
+                    />
+                  ))}
+            </div>
+          ))}
+        {userSkills.map((skill) => (
+          <SwitchRow
+            key={skill.id}
+            icon={Sparkles}
+            title={skill.name}
+            hint={skill.shadowed ? t('skills.conflict') : skill.description}
+            checked={bot.extensions.skills.includes(skill.id)}
+            onChange={() => toggleSkill(skill.id)}
           />
         ))}
       </Card>

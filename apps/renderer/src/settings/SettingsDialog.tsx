@@ -84,7 +84,7 @@ export function SettingsDialog({
 
   let body: ReactNode;
   if (page === 'general') body = <GeneralPage api={api} bot={bot} memoryVersion={memoryVersion} />;
-  else if (page === 'web') body = <WebPage api={api} />;
+  else if (page === 'web') body = <WebPage api={api} onOpenPlugins={() => setPage('extensions')} />;
   else if (page === 'extensions') body = <ExtensionsPage api={api} subscribe={subscribe} />;
   else if (page === 'providers')
     body = <ProvidersPage api={api} bot={bot} providers={providers} presets={presets} canPersistKeys={canPersistKeys} onRefresh={onRefresh} />;

@@ -239,6 +239,108 @@ async function route(kernel: Kernel, req: ApiRequest, ctx: DispatchContext): Pro
     return json(200, await kernel.writeMemoryFile(filePath, content, baseHash));
   }
 
+  // —— 插件与市场 ——
+  if (method === 'GET' && pathname === '/api/plugins') {
+    return json(200, { plugins: await kernel.pluginList() });
+  }
+  if (method === 'POST' && pathname === '/api/plugins/prepare') {
+    const body = objectBody(await req.readBody(MAX_BODY_BYTES));
+    return json(200, await kernel.pluginPrepare(body as Parameters<Kernel['pluginPrepare']>[0]));
+  }
+  if (method === 'POST' && pathname === '/api/plugins/confirm') {
+    const body = objectBody(await req.readBody(MAX_BODY_BYTES));
+    await kernel.pluginConfirm(stringField(body, 'token'));
+    return json(200, { ok: true });
+  }
+  if (method === 'POST' && pathname === '/api/plugins/cancel') {
+    const body = objectBody(await req.readBody(MAX_BODY_BYTES));
+    await kernel.pluginCancel(stringField(body, 'token'));
+    return json(200, { ok: true });
+  }
+  if (method === 'GET' && pathname === '/api/plugins/updates') {
+    return json(200, { updates: await kernel.pluginCheckUpdates() });
+  }
+  if (method === 'POST' && pathname === '/api/plugins/confirm-update') {
+    const body = objectBody(await req.readBody(MAX_BODY_BYTES));
+    await kernel.pluginConfirmUpdate(stringField(body, 'token'));
+    return json(200, { ok: true });
+  }
+  if (method === 'GET' && pathname === '/api/markets') {
+    return json(200, { markets: await kernel.markets() });
+  }
+  if (method === 'POST' && pathname === '/api/markets') {
+    const body = objectBody(await req.readBody(MAX_BODY_BYTES));
+    await kernel.addMarket(stringField(body, 'url'));
+    return json(200, { ok: true });
+  }
+  if (method === 'DELETE' && pathname === '/api/markets') {
+    const fromQuery = url.searchParams.get('url');
+    if (fromQuery !== null) {
+      await kernel.removeMarket(fromQuery);
+    } else {
+      const body = objectBody(await req.readBody(MAX_BODY_BYTES));
+      await kernel.removeMarket(stringField(body, 'url'));
+    }
+    return json(200, { ok: true });
+  }
+  if (method === 'GET' && pathname === '/api/markets/plugins') {
+    const marketUrl = url.searchParams.get('url');
+    if (marketUrl === null) throw new KernelError('invalid', '缺少 url 参数');
+    return json(200, { plugins: await kernel.marketPlugins(marketUrl) });
+  }
+  {
+    const pluginAction = /^\/api\/plugins\/([^/]+)\/(connect|prepare-update)$/.exec(pathname);
+    if (pluginAction !== null && method === 'POST') {
+      const name = decodeURIComponent(pluginAction[1]!);
+      const body = objectBody(await req.readBody(MAX_BODY_BYTES));
+      if (pluginAction[2] === 'connect') {
+        const values = body['values'];
+        if (typeof values !== 'object' || values === null || Array.isArray(values)) {
+          throw new KernelError('invalid', 'values 必须是对象');
+        }
+        await kernel.pluginConnect(name, values as Record<string, string>);
+        return json(200, { ok: true });
+      }
+      return json(200, await kernel.pluginPrepareUpdate(name));
+    }
+    const pluginOne = /^\/api\/plugins\/([^/]+)$/.exec(pathname);
+    if (pluginOne !== null) {
+      const name = decodeURIComponent(pluginOne[1]!);
+      if (method === 'PATCH') {
+        const body = objectBody(await req.readBody(MAX_BODY_BYTES));
+        if (typeof body['enabled'] !== 'boolean') throw new KernelError('invalid', 'enabled 必须是布尔值');
+        await kernel.pluginSetEnabled(name, body['enabled']);
+        return json(200, { ok: true });
+      }
+      if (method === 'DELETE') {
+        await kernel.pluginDelete(name);
+        return json(200, { ok: true });
+      }
+    }
+  }
+
+  // —— Skill ——
+  if (method === 'GET' && pathname === '/api/skills') {
+    return json(200, await kernel.skillList());
+  }
+  if (method === 'POST' && pathname === '/api/skills') {
+    const body = objectBody(await req.readBody(MAX_BODY_BYTES));
+    return json(201, await kernel.addSkill(stringField(body, 'dir')));
+  }
+  {
+    const skillOne = /^\/api\/skills\/(.+)$/.exec(pathname);
+    if (skillOne !== null && method === 'DELETE') {
+      await kernel.removeSkill(decodeURIComponent(skillOne[1]!));
+      return json(200, { ok: true });
+    }
+  }
+  {
+    const botSkills = /^\/api\/bots\/([^/]+)\/skills$/.exec(pathname);
+    if (botSkills !== null && method === 'GET') {
+      return json(200, { skills: await kernel.botSkills(decodeURIComponent(botSkills[1]!)) });
+    }
+  }
+
   let match = /^\/api\/providers\/([^/]+)$/.exec(pathname);
   if (match !== null) {
     const id = decodeURIComponent(match[1]!);
@@ -297,7 +399,14 @@ async function route(kernel: Kernel, req: ApiRequest, ctx: DispatchContext): Pro
       const text = stringField(body, 'text');
       const images = body['images'] ?? [];
       if (!Array.isArray(images)) throw new KernelError('invalid', 'images 必须是数组');
-      const mode = kernel.sendMessage(id, text, images as ImageInput[]);
+      const skills = body['skills'] ?? [];
+      if (!Array.isArray(skills) || !skills.every((s) => typeof s === 'string')) {
+        throw new KernelError('invalid', 'skills 必须是字符串数组');
+      }
+      const mode =
+        skills.length > 0
+          ? await kernel.sendMessageWithSkills(id, text, images as ImageInput[], skills as string[])
+          : kernel.sendMessage(id, text, images as ImageInput[]);
       return json(200, { ok: true, mode });
     }
   }

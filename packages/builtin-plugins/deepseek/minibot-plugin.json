@@ -1,0 +1,14 @@
+{
+  "name": "deepseek",
+  "version": "1.0.0",
+  "description": "DeepSeek 搜索与抓取（自封装 MCP server）",
+  "config": [
+    {
+      "key": "api_key",
+      "title": "API Key",
+      "description": "DeepSeek API Key；也可以改用已有的 DeepSeek 服务",
+      "secret": true,
+      "required": false
+    }
+  ]
+}

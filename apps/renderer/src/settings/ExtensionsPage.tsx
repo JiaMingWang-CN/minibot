@@ -7,6 +7,8 @@ import { t, type MessageKey } from '../i18n';
 import { cn } from '../lib/cn';
 import { BUTTON, SETTINGS_CARD, SettingsGroup, errorText } from '../ui/settings';
 import { McpServerDialog } from './McpServerDialog';
+import { PluginsSection } from './PluginsSection';
+import { SkillsSection } from './SkillsSection';
 
 const STATUS_KEY: Record<string, MessageKey> = {
   connecting: 'mcp.status.connecting',
@@ -65,6 +67,9 @@ export function ExtensionsPage({ api, subscribe }: { api: Api; subscribe: Subscr
   };
 
   return (
+    <>
+    <PluginsSection api={api} subscribe={subscribe} />
+    <SkillsSection api={api} />
     <SettingsGroup
       label={t('extensions.mcp')}
       actions={
@@ -120,5 +125,6 @@ export function ExtensionsPage({ api, subscribe }: { api: Api; subscribe: Subscr
       )}
       {adding && <McpServerDialog api={api} onClose={() => setAdding(false)} onCreated={refresh} />}
     </SettingsGroup>
+    </>
   );
 }

@@ -2,10 +2,11 @@
 // Enter 发送，Shift+Enter 换行；输入法组字时不发送。图片可以点 ＋ 选、粘贴或拖进来。
 
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import type { SkillInfo } from '@minibot/core';
 import { ArrowUp, Plus, Square, X } from 'lucide-react';
 import { cn } from '../lib/cn';
 import { t } from '../i18n';
-import { ELEVATED_FLOAT, ICON_BUTTON_SM } from '../ui/recipes';
+import { ELEVATED_FLOAT, ICON_BUTTON_SM, MENU_ROW, MENU_SHEET } from '../ui/recipes';
 
 export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
 
@@ -31,6 +32,10 @@ export function Composer({
   error,
   above,
   tools,
+  skills,
+  selectedSkills,
+  onPickSkill,
+  onRemoveSkill,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -48,12 +53,22 @@ export function Composer({
   above?: ReactNode;
   /** ＋ 右边的工具按钮（审批方式） */
   tools?: ReactNode;
+  /** `/` 点名菜单可用的 skill */
+  skills?: SkillInfo[];
+  selectedSkills?: string[];
+  onPickSkill?: (name: string) => void;
+  onRemoveSkill?: (name: string) => void;
 }) {
   const input = useRef<HTMLTextAreaElement>(null);
   const file = useRef<HTMLInputElement>(null);
   const [multiline, setMultiline] = useState(false);
-  const hasContent = value.trim().length > 0 || images.length > 0;
+  const [highlight, setHighlight] = useState(0);
+  const hasContent = value.trim().length > 0 || images.length > 0 || (selectedSkills?.length ?? 0) > 0;
   const showStop = running && !hasContent;
+  const slash = value.startsWith('/') && !/\s/.test(value);
+  const query = slash ? value.slice(1).trim().toLowerCase() : '';
+  const options = (skills ?? []).filter((s) => query === '' || s.name.toLowerCase().includes(query));
+  const menuOpen = slash;
 
   // 文本框跟着内容长高，到上限后滚动
   useLayoutEffect(() => {
@@ -74,6 +89,18 @@ export function Composer({
   return (
     <div className="flex flex-col gap-2">
       {above}
+      {(selectedSkills?.length ?? 0) > 0 && (
+        <div className="flex flex-wrap gap-1.5 px-1">
+          {selectedSkills!.map((name) => (
+            <span key={name} className="inline-flex items-center gap-1 rounded-full bg-ink/[0.08] px-2.5 py-1 text-[12px] text-ink">
+              {name}
+              <button type="button" aria-label={t('common.delete')} onClick={() => onRemoveSkill?.(name)} className="text-ink-tertiary hover:text-ink">
+                <X size={11} aria-hidden />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
       {images.length > 0 && (
         <div className="flex flex-wrap gap-2 px-1">
           {images.map((i) => (
@@ -95,6 +122,29 @@ export function Composer({
           {error}
         </p>
       )}
+      <div className="relative">
+        {menuOpen && (
+          <div className={cn(MENU_SHEET, 'absolute bottom-full left-1 mb-2 max-h-60 w-[240px] overflow-y-auto')}>
+            {options.length === 0 ? (
+              <div className="px-2 py-1.5 text-[13px] text-ink-tertiary">{t('skills.menuEmpty')}</div>
+            ) : (
+              options.map((s, i) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    onPickSkill?.(s.name);
+                    onChange('');
+                  }}
+                  className={cn(MENU_ROW, i === highlight && 'bg-ink/[0.08]')}>
+                  <span className="truncate">{s.name}</span>
+                  <span className="ml-auto min-w-0 truncate text-[12px] text-ink-tertiary">{s.description}</span>
+                </button>
+              ))
+            )}
+          </div>
+        )}
       <div
         className={cn(
           'flex items-end gap-1.5 p-2 transition-[border-radius,box-shadow] focus-within:ring-ink/20',
@@ -138,7 +188,10 @@ export function Composer({
           disabled={disabled}
           placeholder={placeholder}
           aria-label={placeholder}
-          onChange={(e) => onChange(e.target.value)}
+          onChange={(e) => {
+            setHighlight(0);
+            onChange(e.target.value);
+          }}
           onPaste={(e) => {
             const files = filesOf(e.clipboardData.items);
             if (files.length > 0) {
@@ -147,6 +200,32 @@ export function Composer({
             }
           }}
           onKeyDown={(e) => {
+            if (menuOpen) {
+              if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setHighlight((h) => (options.length === 0 ? 0 : (h + 1) % options.length));
+                return;
+              }
+              if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setHighlight((h) => (options.length === 0 ? 0 : (h - 1 + options.length) % options.length));
+                return;
+              }
+              if (e.key === 'Escape') {
+                e.preventDefault();
+                onChange('');
+                return;
+              }
+              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                const picked = options[highlight] ?? options[0];
+                if (picked !== undefined) {
+                  onPickSkill?.(picked.name);
+                  onChange('');
+                }
+                return;
+              }
+            }
             if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
               if (hasContent) onSubmit();
@@ -174,6 +253,7 @@ export function Composer({
             <ArrowUp size={15} strokeWidth={2.25} aria-hidden />
           </button>
         )}
+      </div>
       </div>
     </div>
   );

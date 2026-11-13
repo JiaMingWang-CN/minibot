@@ -15,7 +15,9 @@ export type Block =
       status: 'ok' | 'error' | 'denied' | 'cancelled';
     }
   /** 用户附带的图片；数据存在附件目录，消息里只存引用 */
-  | { type: 'image'; id: string; mediaType: ImageMediaType };
+  | { type: 'image'; id: string; mediaType: ImageMediaType }
+  /** 用户点名的 skill：text 为 formatSkillBody 的结果，发送时作为一段用户文本 */
+  | { type: 'skill'; name: string; text: string };
 
 export type ImageMediaType = 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
 

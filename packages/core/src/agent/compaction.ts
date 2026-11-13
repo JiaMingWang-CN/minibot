@@ -90,7 +90,7 @@ function isPureTextUser(message: StoredMessage): boolean {
     message.role === 'user' &&
     message.kind === null &&
     message.blocks.length > 0 &&
-    message.blocks.every((b) => b.type === 'text')
+    message.blocks.every((b) => b.type === 'text' || b.type === 'skill')
   );
 }
 

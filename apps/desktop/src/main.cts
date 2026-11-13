@@ -110,12 +110,16 @@ app.on('child-process-gone', (_event, details) => {
 async function bootstrap(): Promise<void> {
   const dataRoot = process.env['MINIBOT_HOME'] ?? defaultDataRoot();
   const crypto = cryptoModule.electronCrypto();
+  const builtinPluginsDir = app.isPackaged
+    ? path.join(process.resourcesPath, 'builtin-plugins')
+    : path.join(__dirname, '..', '..', '..', 'packages', 'builtin-plugins');
   kernel = await Kernel.open({
     dataRoot,
     crypto,
     appVersion: app.getVersion(),
     collectUrl: collectUrl(),
     openExternal: async (url) => openExternal(url),
+    builtinPluginsDir,
   });
   // 手机功能的任何问题（没有密钥库、端口被占用…）只体现在“手机”设置页，不影响内核与本机界面
   try {
@@ -174,6 +178,18 @@ async function bootstrap(): Promise<void> {
     if (kernel === undefined || typeof botId !== 'string') throw new Error('拒绝请求');
     const error = await shell.openPath(kernel.memoryDir(botId));
     if (error.length > 0) throw new Error(error);
+  });
+
+  ipcMain.handle('minibot:pick-folder', async (event) => {
+    assertTrusted(event);
+    const result = await dialog.showOpenDialog({ properties: ['openDirectory'] });
+    return result.canceled ? null : (result.filePaths[0] ?? null);
+  });
+
+  ipcMain.handle('minibot:pick-zip', async (event) => {
+    assertTrusted(event);
+    const result = await dialog.showOpenDialog({ properties: ['openFile'], filters: [{ name: 'zip', extensions: ['zip'] }] });
+    return result.canceled ? null : (result.filePaths[0] ?? null);
   });
 
   ipcMain.on('minibot:title-bar', (event, colors: unknown) => {
