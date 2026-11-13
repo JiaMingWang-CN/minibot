@@ -85,6 +85,7 @@ import { WebToolProvider } from './web/web-tools.ts';
 import { loadMcpServers } from './mcp/config.ts';
 import { McpManager } from './mcp/manager.ts';
 import { McpToolProvider } from './mcp/tools.ts';
+import { McpOAuthProvider } from './mcp/oauth.ts';
 import { callModel as defaultCallModel, instrumentCallModel, testConnection, type CallModel } from './model/client.ts';
 import { DiagLog } from './diag/log.ts';
 import { ModelMetrics } from './diag/metrics.ts';
@@ -345,6 +346,14 @@ export class Kernel {
       home: this.home,
       platform: this.platform,
       redact: (text) => this.secretSet.redact(text),
+      authProvider: (server, redirectUrl) =>
+        new McpOAuthProvider({
+          serverId: server.id,
+          serverName: server.name,
+          redirectUrl,
+          secretStore: this.secretStore,
+          ...(this.openExternal !== undefined ? { openExternal: this.openExternal } : {}),
+        }),
     });
     void this.mcp.start();
     this.tools.register(

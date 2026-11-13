@@ -115,6 +115,7 @@ async function bootstrap(): Promise<void> {
     crypto,
     appVersion: app.getVersion(),
     collectUrl: collectUrl(),
+    openExternal: async (url) => openExternal(url),
   });
   // 手机功能的任何问题（没有密钥库、端口被占用…）只体现在“手机”设置页，不影响内核与本机界面
   try {

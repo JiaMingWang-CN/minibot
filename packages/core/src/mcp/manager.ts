@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+import { Client, StreamableHTTPClientTransport, auth as sdkAuth } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import type { OAuthClientProvider, Transport } from '@modelcontextprotocol/client';
 import type { KernelEvent } from '../events.ts';
@@ -8,6 +8,7 @@ import type { SecretStore } from '../secrets/store.ts';
 import { killTree } from '../tools/process.ts';
 import type { McpServerConfig } from './config.ts';
 import { buildStdioEnv } from './stdio-env.ts';
+import { McpOAuthProvider, startOAuthCallback } from './oauth.ts';
 
 export type McpStatus = 'connecting' | 'connected' | 'failed' | 'needs_login' | 'stopped';
 
@@ -52,7 +53,11 @@ export interface McpManagerOptions {
   /** 错误文本脱敏；内核传入 secrets.redact */
   redact?: (text: string) => string;
   /** OAuth 客户端信息与 token 存储；没有则不传 authProvider */
-  authProvider?: (server: McpServerConfig) => OAuthClientProvider | undefined;
+  authProvider?: (server: McpServerConfig, redirectUrl: string) => McpOAuthProvider;
+  /** 测试注入：走 SDK 的 auth() 或模拟流程 */
+  oauthAuth?: (provider: OAuthClientProvider, options: { serverUrl: string; authorizationCode?: string; iss?: string }) => Promise<'AUTHORIZED' | 'REDIRECT'>;
+  /** 授权回调等待上限，默认 5 分钟 */
+  loginTimeoutMs?: number;
   /** 测试注入的传输层（例如模拟永远不响应的 server） */
   transportFactory?: (server: McpServerConfig) => Transport;
 }
@@ -214,7 +219,11 @@ export class McpManager {
     await this.connectInternal(entry, true);
   }
 
-  private async connectInternal(entry: Entry, manual: boolean): Promise<void> {
+  private async connectInternal(
+    entry: Entry,
+    manual: boolean,
+    oauthProvider?: OAuthClientProvider,
+  ): Promise<void> {
     if (this.stopping) return;
     const generation = entry.generation + 1;
     entry.generation = generation;
@@ -223,7 +232,7 @@ export class McpManager {
     if (manual) entry.restartCount = 0;
     this.setStatus(entry, 'connecting', null);
 
-    const transport = this.createTransport(entry.config, generation);
+    const transport = this.createTransport(entry.config, generation, oauthProvider);
     if (transport === null) {
       this.setStatus(entry, 'failed', `工作目录不存在：${entry.config.transport.type === 'stdio' ? entry.config.transport.cwd ?? '' : ''}`);
       return;
@@ -260,7 +269,12 @@ export class McpManager {
       if (entry.generation !== generation) return;
       if (this.stopping) return;
       // 先把状态定下来：连接超时后底层可能还在 spawn，清理不能拖住状态更新
-      this.setStatus(entry, 'failed', this.redact(errorText(err)));
+      const message = errorText(err);
+      if (/unauthorized|401|invalid_token|authorization required|needs_login/i.test(message)) {
+        this.setStatus(entry, 'needs_login', '需要登录');
+      } else {
+        this.setStatus(entry, 'failed', this.redact(message));
+      }
       void withTimeout(this.closeConnection(entry), 2_000, '清理超时').catch(() => undefined);
     }
   }
@@ -268,6 +282,7 @@ export class McpManager {
   private createTransport(
     config: McpServerConfig,
     _generation: number,
+    oauthProvider?: OAuthClientProvider,
   ): Transport | null {
     if (this.opts.transportFactory !== undefined) return this.opts.transportFactory(config);
     if (config.transport.type === 'stdio') {
@@ -294,8 +309,13 @@ export class McpManager {
       requestInit: { headers },
     };
     if (config.transport.auth === 'oauth') {
-      const provider = this.opts.authProvider?.(config);
-      if (provider !== undefined) options.authProvider = provider;
+      const provider =
+        oauthProvider ??
+        this.opts.authProvider?.(config, 'http://127.0.0.1:0/callback');
+      // 普通连接只在已有 token 时带上 authProvider，避免一启动就弹授权页
+      if (provider !== undefined && (oauthProvider !== undefined || (provider as McpOAuthProvider).hasTokens())) {
+        options.authProvider = provider;
+      }
     }
     return new StreamableHTTPClientTransport(new URL(config.transport.url), options);
   }
@@ -316,6 +336,61 @@ export class McpManager {
       if (!this.stopping && entry.generation === generation) void this.connectInternal(entry, false);
     }, this.opts.restartDelayMs ?? 500);
     timer.unref?.();
+  }
+
+  private oauthAuth(
+    provider: OAuthClientProvider,
+    options: { serverUrl: string; authorizationCode?: string; iss?: string },
+  ): Promise<'AUTHORIZED' | 'REDIRECT'> {
+    if (this.opts.oauthAuth !== undefined) return this.opts.oauthAuth(provider, options);
+    return sdkAuth(provider, {
+      serverUrl: options.serverUrl,
+      ...(options.authorizationCode !== undefined ? { authorizationCode: options.authorizationCode } : {}),
+      ...(options.iss !== undefined ? { iss: options.iss } : {}),
+    });
+  }
+
+  /** 本机回调 + SDK OAuth：打开授权页，收到回调换取 token 后重连 */
+  async login(id: string): Promise<void> {
+    await this.reload();
+    const entry = this.entries.get(id);
+    if (entry === undefined) throw new Error(`MCP server 不存在：${id}`);
+    if (entry.config.transport.type !== 'http' || entry.config.transport.auth !== 'oauth') {
+      throw new Error('这个 MCP server 不需要登录');
+    }
+    if (this.opts.authProvider === undefined) throw new Error('没有可用的系统浏览器');
+    const callback = await startOAuthCallback();
+    try {
+      const provider = this.opts.authProvider(entry.config, callback.redirectUrl);
+      callback.setExpectedState(await provider.state());
+      const first = await this.oauthAuth(provider, { serverUrl: entry.config.transport.url });
+      if (first === 'REDIRECT') {
+        const params = await callback.wait(this.opts.loginTimeoutMs ?? 300_000);
+        const code = params.get('code');
+        if (code === null) throw new Error(params.get('error') ?? '授权失败');
+        const iss = params.get('iss') ?? undefined;
+        await this.oauthAuth(provider, {
+          serverUrl: entry.config.transport.url,
+          authorizationCode: code,
+          ...(iss !== undefined ? { iss } : {}),
+        });
+      }
+      await callback.close().catch(() => undefined);
+      await this.connectInternal(entry, true, provider);
+    } catch (err) {
+      await callback.close().catch(() => undefined);
+      this.setStatus(entry, 'needs_login', this.redact(errorText(err)));
+    }
+  }
+
+  async logout(id: string): Promise<void> {
+    const entry = this.entries.get(id);
+    if (entry === undefined) return;
+    const provider = this.opts.authProvider?.(entry.config, 'http://127.0.0.1:0/callback');
+    if (provider !== undefined) await provider.logout();
+    else await this.opts.secretStore.delete(`mcp:${id}:oauth`);
+    await this.closeConnection(entry);
+    this.setStatus(entry, 'needs_login', null);
   }
 
   async disconnect(id: string): Promise<void> {
