@@ -44,6 +44,9 @@ export type BotPatch = Partial<
     | 'approvalMode'
     | 'thinkingLevel'
     | 'allowedCommands'
+    | 'extensions'
+    | 'allowWeb'
+    | 'allowedMcpTools'
     | 'memoryEnabled'
   >
 >;

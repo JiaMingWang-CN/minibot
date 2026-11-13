@@ -98,15 +98,35 @@ export function SettingsPage({ bot, patch, isRunning, onOpenAllowlist }: PanelCo
               {t(`approvalMode.${bot.approvalMode}.desc` as MessageKey)}
             </p>
           </div>
-          {bot.allowedCommands.length > 0 && (
+          {(bot.allowedCommands.length > 0 || bot.allowWeb || bot.allowedMcpTools.length > 0) && (
             <div className="flex min-w-0 flex-col gap-1 pl-[26px]">
               <span className="text-[13px] text-ink-secondary">{t('allowlist.title')}</span>
               {bot.allowedCommands.map((command) => (
-                <div key={command} className="flex min-w-0 items-center gap-2">
+                <div key={`cmd:${command}`} className="flex min-w-0 items-center gap-2">
                   <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-ink">{command}</span>
                   <TrashButton
                     label={t('allowlist.removeAria', { command })}
                     onClick={() => run(patch({ allowedCommands: bot.allowedCommands.filter((c) => c !== command) }))}
+                  />
+                </div>
+              ))}
+              {bot.allowWeb && (
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className="min-w-0 flex-1 truncate text-[12px] text-ink">{t('allowlist.webAll')}</span>
+                  <TrashButton
+                    label={t('allowlist.removeAria', { command: t('allowlist.groupWeb') })}
+                    onClick={() => run(patch({ allowWeb: false }))}
+                  />
+                </div>
+              )}
+              {bot.allowedMcpTools.map((key) => (
+                <div key={`mcp:${key}`} className="flex min-w-0 items-center gap-2">
+                  <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-ink">{key}</span>
+                  <TrashButton
+                    label={t('allowlist.removeAria', { command: key })}
+                    onClick={() =>
+                      run(patch({ allowedMcpTools: bot.allowedMcpTools.filter((k) => k !== key) }))
+                    }
                   />
                 </div>
               ))}

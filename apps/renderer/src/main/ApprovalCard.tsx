@@ -30,6 +30,19 @@ export function ApprovalCard({
 }) {
   const [always, setAlways] = useState(false);
   const done = result !== undefined;
+  // 不认识的 source 值按没有 source 处理：只显示 summary
+  const sourceLabel =
+    request.source === 'web'
+      ? t('approval.sourceWeb')
+      : request.source === 'mcp'
+        ? t('approval.sourceMcp', { name: request.serverName ?? '' })
+        : undefined;
+  const alwaysLabel =
+    request.alwaysKind === 'web'
+      ? t('approval.alwaysWeb')
+      : request.alwaysKind === 'mcp_tool'
+        ? t('approval.alwaysMcp')
+        : t('approval.always');
   return (
     <div
       role="alertdialog"
@@ -44,6 +57,11 @@ export function ApprovalCard({
             <span className="min-w-0 truncate text-[12px] text-ink-tertiary">{source}</span>
           </span>
           <span className="text-[13px] break-words text-ink-secondary">{request.summary}</span>
+          {sourceLabel !== undefined && (
+            <span className="text-[12px] break-words text-ink-tertiary">
+              {sourceLabel} · {request.tool}
+            </span>
+          )}
         </div>
       </div>
       {request.command !== undefined && (
@@ -66,7 +84,7 @@ export function ApprovalCard({
           {request.canAlwaysAllow && (
             <label className="mr-auto flex items-center gap-2 text-[13px] text-ink-secondary">
               <input type="checkbox" className="size-4 accent-[var(--color-ink)]" checked={always} onChange={(e) => setAlways(e.target.checked)} />
-              {t('approval.always')}
+              {alwaysLabel}
             </label>
           )}
           <span className="ml-auto flex gap-2">
