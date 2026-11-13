@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 import { atomicWriteFile } from '../fs/atomic-write.ts';
 import type { DataPaths } from '../paths.ts';
+import type { McpServerConfig } from '../mcp/config.ts';
 
 export type SearchEngine = 'none' | 'deepseek' | 'tavily';
 
@@ -13,6 +14,7 @@ export interface WebSettings {
 export interface ExtensionsFile {
   schemaVersion: 1;
   web: WebSettings;
+  mcpServers: McpServerConfig[];
   [key: string]: unknown;
 }
 
@@ -23,7 +25,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function defaultExtensions(): ExtensionsFile {
-  return { schemaVersion: 1, web: { fetchEnabled: true, searchEngine: 'none' } };
+  return { schemaVersion: 1, web: { fetchEnabled: true, searchEngine: 'none' }, mcpServers: [] };
 }
 
 function migrate(raw: unknown): ExtensionsFile {
@@ -37,7 +39,8 @@ function migrate(raw: unknown): ExtensionsFile {
         : 'none',
   };
   // 保留未知字段，供后续版本读写不丢
-  return { ...raw, schemaVersion: 1, web };
+  const mcpServers = Array.isArray(raw['mcpServers']) ? (raw['mcpServers'] as McpServerConfig[]) : [];
+  return { ...raw, schemaVersion: 1, web, mcpServers };
 }
 
 export async function loadExtensions(p: DataPaths): Promise<ExtensionsFile> {

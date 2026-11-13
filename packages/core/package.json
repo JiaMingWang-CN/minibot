@@ -13,11 +13,16 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@modelcontextprotocol/client": "2.4.0",
     "@mozilla/readability": "0.6.0",
     "@noble/ciphers": "2.4.0",
     "@vscode/ripgrep": "1.18.0",
     "linkedom": "0.18.15",
     "turndown": "7.2.5",
     "ws": "8.22.1"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/server": "2.4.0",
+    "zod": "4.6.7"
   }
 }
