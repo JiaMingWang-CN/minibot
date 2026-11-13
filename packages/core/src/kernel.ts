@@ -82,8 +82,8 @@ import type { ToolEnv } from './tools/registry.ts';
 import { ToolCatalog, type ExternalTool } from './tools/catalog.ts';
 import { loadExtensions, saveExtensions, type WebSettings } from './extensions/store.ts';
 import { WebToolProvider } from './web/web-tools.ts';
-import { loadMcpServers } from './mcp/config.ts';
-import { McpManager } from './mcp/manager.ts';
+import { loadMcpServers, saveMcpServers, materializeServer, parseMcpJson, assertUniqueServerName, type McpServerConfig, type McpServerDraft } from './mcp/config.ts';
+import { McpManager, type McpServerState } from './mcp/manager.ts';
 import { McpToolProvider } from './mcp/tools.ts';
 import { McpOAuthProvider } from './mcp/oauth.ts';
 import { callModel as defaultCallModel, instrumentCallModel, testConnection, type CallModel } from './model/client.ts';
@@ -1409,6 +1409,109 @@ export class Kernel {
       await saveExtensions(this.paths, file);
       return file.web;
     });
+  }
+
+  private static mcpSecretKeys(config: McpServerConfig): string[] {
+    const keys: string[] = [`mcp:${config.id}:oauth`];
+    if (config.transport.type === 'stdio') {
+      for (const [name, value] of Object.entries(config.transport.env)) {
+        if (value.secret) keys.push(`mcp:${config.id}:env:${name}`);
+      }
+    } else {
+      for (const [name, value] of Object.entries(config.transport.headers)) {
+        if (value.secret) keys.push(`mcp:${config.id}:header:${name}`);
+      }
+    }
+    return keys;
+  }
+
+  async mcpServerList(): Promise<(McpServerConfig & McpServerState)[]> {
+    const configs = await loadMcpServers(this.paths);
+    const states = new Map(this.mcp.states().map((state) => [state.id, state]));
+    return configs.map((config) => {
+      const state = states.get(config.id);
+      return {
+        ...config,
+        status: state?.status ?? 'stopped',
+        error: state?.error ?? null,
+        tools: state?.tools ?? [],
+      };
+    });
+  }
+
+  parseMcp(text: string): ReturnType<typeof parseMcpJson> {
+    try {
+      return parseMcpJson(text);
+    } catch (err) {
+      throw new KernelError('invalid', err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async addMcpServer(draft: McpServerDraft): Promise<McpServerConfig> {
+    if (typeof draft?.name !== 'string' || draft.name.trim().length === 0) {
+      throw new KernelError('invalid', 'MCP server 名称不能为空');
+    }
+    const servers = await loadMcpServers(this.paths);
+    try {
+      assertUniqueServerName(servers, draft.name);
+    } catch (err) {
+      throw new KernelError('invalid', err instanceof Error ? err.message : String(err));
+    }
+    const { config, secrets } = materializeServer(randomUUID(), draft);
+    if (secrets.length > 0 && !this.secretStore.canPersist()) {
+      throw new KernelError('key_not_persistable', '当前系统没有可用的密钥库，无法保存这个 MCP server 的密钥');
+    }
+    for (const entry of secrets) await this.secretStore.set(entry.key, entry.value);
+    await saveMcpServers(this.paths, [...servers, config]);
+    await this.enableForMainBot('mcpServers', config.id);
+    void this.mcp.connect(config.id).catch(() => {});
+    return config;
+  }
+
+  async updateMcpServer(id: string, draft: McpServerDraft): Promise<McpServerConfig> {
+    const servers = await loadMcpServers(this.paths);
+    const existing = servers.find((s) => s.id === id);
+    if (existing === undefined) throw new KernelError('not_found', `MCP server ${id} 不存在`);
+    try {
+      assertUniqueServerName(servers.filter((s) => s.id !== id), draft.name);
+    } catch (err) {
+      throw new KernelError('invalid', err instanceof Error ? err.message : String(err));
+    }
+    const { config, secrets } = materializeServer(id, draft);
+    if (secrets.length > 0 && !this.secretStore.canPersist()) {
+      throw new KernelError('key_not_persistable', '当前系统没有可用的密钥库，无法保存这个 MCP server 的密钥');
+    }
+    for (const key of Kernel.mcpSecretKeys(existing)) await this.secretStore.delete(key);
+    for (const entry of secrets) await this.secretStore.set(entry.key, entry.value);
+    await saveMcpServers(this.paths, servers.map((s) => (s.id === id ? config : s)));
+    void this.mcp.connect(id).catch(() => {});
+    return config;
+  }
+
+  async deleteMcpServer(id: string): Promise<void> {
+    const servers = await loadMcpServers(this.paths);
+    const existing = servers.find((s) => s.id === id);
+    if (existing === undefined) throw new KernelError('not_found', `MCP server ${id} 不存在`);
+    await this.mcp.disconnect(id).catch(() => {});
+    for (const key of Kernel.mcpSecretKeys(existing)) await this.secretStore.delete(key);
+    await this.removeFromAllBots('mcpServers', id);
+    await saveMcpServers(this.paths, servers.filter((s) => s.id !== id));
+  }
+
+  async connectMcpServer(id: string): Promise<void> {
+    await this.mcp.connect(id);
+  }
+
+  async refreshMcpServer(id: string): Promise<void> {
+    await this.mcp.refreshTools(id);
+  }
+
+  async loginMcpServer(id: string): Promise<void> {
+    await this.mcp.login(id);
+  }
+
+  async logoutMcpServer(id: string): Promise<void> {
+    await this.mcp.logout(id);
   }
 
   async updateSettings(s: { consolidationModel: AppConfig['consolidationModel'] }): Promise<void> {

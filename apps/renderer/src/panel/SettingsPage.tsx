@@ -1,9 +1,10 @@
 // bot 设置页：人设；操作前要不要问（三档 + 总是允许的命令）；上下文窗口与输出上限。
 // 布局照 OpenMausBot bot 面板的设置页。
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ApprovalMode } from '@minibot/core';
-import { FileText, Gauge, Globe, ListChecks, ShieldCheck, Text } from 'lucide-react';
+import { FileText, Gauge, Globe, ListChecks, Plug, ShieldCheck, Text } from 'lucide-react';
+import type { McpServerView } from '../api';
 import { cn } from '../lib/cn';
 import { t, type MessageKey } from '../i18n';
 import { errorText } from '../ui/settings';
@@ -43,12 +44,21 @@ function NumberRow({ icon, title, value, onCommit }: { icon: typeof Gauge; title
   );
 }
 
-export function SettingsPage({ bot, patch, isRunning, onOpenAllowlist }: PanelContext) {
+export function SettingsPage({ api, bot, patch, isRunning, onOpenAllowlist }: PanelContext) {
   const [persona, setPersona] = useState(bot.persona);
   const [error, setError] = useState<string | null>(null);
+  const [mcpServers, setMcpServers] = useState<McpServerView[]>([]);
+  useEffect(() => {
+    api.mcpServers().then((r) => setMcpServers(r.servers), () => undefined);
+  }, [api]);
   const run = (job: Promise<void>): void => {
     setError(null);
     job.catch((err: unknown) => setError(errorText(err)));
+  };
+  const toggleMcp = (id: string): void => {
+    const current = bot.extensions.mcpServers;
+    const next = current.includes(id) ? current.filter((x) => x !== id) : [...current, id];
+    run(patch({ extensions: { ...bot.extensions, mcpServers: next } }));
   };
 
   return (
@@ -148,6 +158,16 @@ export function SettingsPage({ bot, patch, isRunning, onOpenAllowlist }: PanelCo
             run(patch({ extensions: { ...bot.extensions, web: !bot.extensions.web } }))
           }
         />
+        {mcpServers.map((server) => (
+          <SwitchRow
+            key={server.id}
+            icon={Plug}
+            title={server.name}
+            hint={t(`mcp.status.${server.status}` as MessageKey)}
+            checked={bot.extensions.mcpServers.includes(server.id)}
+            onChange={() => toggleMcp(server.id)}
+          />
+        ))}
       </Card>
 
       <Card label={t('panel.modelLimits')}>

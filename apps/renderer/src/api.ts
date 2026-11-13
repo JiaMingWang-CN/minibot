@@ -10,6 +10,9 @@ import type {
   KernelEvent,
   KernelState,
   KnownModel,
+  McpServerConfig,
+  McpServerDraft,
+  McpServerState,
   OnboardingInput,
   Preset,
   Provider,
@@ -31,6 +34,8 @@ export interface Conn {
 export interface PresetWithModels extends Preset {
   models: KnownModel[];
 }
+
+export type McpServerView = McpServerConfig & McpServerState;
 
 export type BotPatch = Partial<
   Pick<
@@ -165,6 +170,17 @@ export function createApi(transport: Transport) {
     webSettings: () => call<WebSettings>('GET', '/api/extensions/web'),
     updateWebSettings: (patch: { fetchEnabled?: boolean; searchEngine?: 'none' | 'deepseek' | 'tavily' }) =>
       call<WebSettings>('PUT', '/api/extensions/web', patch),
+    mcpServers: () => call<{ servers: McpServerView[] }>('GET', '/api/mcp/servers'),
+    addMcpServer: (draft: McpServerDraft) => call<McpServerConfig>('POST', '/api/mcp/servers', draft),
+    updateMcpServer: (id: string, draft: McpServerDraft) =>
+      call<McpServerConfig>('PATCH', `/api/mcp/servers/${enc(id)}`, draft),
+    deleteMcpServer: (id: string) => call<{ ok: true }>('DELETE', `/api/mcp/servers/${enc(id)}`),
+    parseMcp: (text: string) =>
+      call<{ servers: McpServerDraft[]; ignored: string[] }>('POST', '/api/mcp/parse', { text }),
+    mcpConnect: (id: string) => call<{ ok: true }>('POST', `/api/mcp/servers/${enc(id)}/connect`),
+    mcpRefresh: (id: string) => call<{ ok: true }>('POST', `/api/mcp/servers/${enc(id)}/refresh`),
+    mcpLogin: (id: string) => call<{ ok: true }>('POST', `/api/mcp/servers/${enc(id)}/login`),
+    mcpLogout: (id: string) => call<{ ok: true }>('POST', `/api/mcp/servers/${enc(id)}/logout`),
     approvalLog: (before?: number, limit = 50) => {
       const search = new URLSearchParams({ limit: String(limit) });
       if (before !== undefined) search.set('before', String(before));

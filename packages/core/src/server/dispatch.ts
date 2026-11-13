@@ -144,6 +144,39 @@ async function route(kernel: Kernel, req: ApiRequest, ctx: DispatchContext): Pro
     }
     return json(200, await kernel.updateWebSettings(body as Parameters<Kernel['updateWebSettings']>[0]));
   }
+  if (method === 'GET' && pathname === '/api/mcp/servers') {
+    return json(200, { servers: await kernel.mcpServerList() });
+  }
+  if (method === 'POST' && pathname === '/api/mcp/servers') {
+    const body = objectBody(await req.readBody(MAX_BODY_BYTES));
+    return json(200, await kernel.addMcpServer(body as unknown as Parameters<Kernel['addMcpServer']>[0]));
+  }
+  if (method === 'POST' && pathname === '/api/mcp/parse') {
+    const body = objectBody(await req.readBody(MAX_BODY_BYTES));
+    return json(200, kernel.parseMcp(stringField(body, 'text')));
+  }
+  const mcpOne = /^\/api\/mcp\/servers\/([^/]+)$/.exec(pathname);
+  if (mcpOne !== null) {
+    const id = decodeURIComponent(mcpOne[1]!);
+    if (method === 'PATCH') {
+      const body = objectBody(await req.readBody(MAX_BODY_BYTES));
+      return json(200, await kernel.updateMcpServer(id, body as unknown as Parameters<Kernel['updateMcpServer']>[1]));
+    }
+    if (method === 'DELETE') {
+      await kernel.deleteMcpServer(id);
+      return json(200, { ok: true });
+    }
+  }
+  const mcpAction = /^\/api\/mcp\/servers\/([^/]+)\/(connect|refresh|login|logout)$/.exec(pathname);
+  if (mcpAction !== null && method === 'POST') {
+    const id = decodeURIComponent(mcpAction[1]!);
+    const action = mcpAction[2]!;
+    if (action === 'connect') await kernel.connectMcpServer(id);
+    else if (action === 'refresh') await kernel.refreshMcpServer(id);
+    else if (action === 'login') await kernel.loginMcpServer(id);
+    else await kernel.logoutMcpServer(id);
+    return json(200, { ok: true });
+  }
   if (method === 'PUT' && pathname === '/api/settings') {
     const body = objectBody(await req.readBody(MAX_BODY_BYTES));
     const value = body['consolidationModel'];
