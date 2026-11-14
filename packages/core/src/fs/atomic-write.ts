@@ -22,6 +22,8 @@ export async function atomicWriteFile(
   target: string,
   data: string | Buffer,
   deps: AtomicDeps = defaultDeps,
+  /** 目标不存在时新文件的权限位（POSIX）；默认按 umask。密钥类文件传 0o600 */
+  newFileMode?: number,
 ): Promise<void> {
   const dir = path.dirname(target);
   await fs.mkdir(dir, { recursive: true });
@@ -32,10 +34,13 @@ export async function atomicWriteFile(
     () => undefined,
   );
   try {
-    const fh = await fs.open(tmp, 'w');
+    const fh = await fs.open(tmp, 'w', newFileMode ?? 0o666);
     try {
       await fh.writeFile(data);
-      if (mode !== undefined && process.platform !== 'win32') await fh.chmod(mode);
+      if (process.platform !== 'win32') {
+        const want = mode ?? newFileMode;
+        if (want !== undefined) await fh.chmod(want);
+      }
       await fh.sync();
     } finally {
       await fh.close();
@@ -47,7 +52,8 @@ export async function atomicWriteFile(
   }
 }
 
-async function renameWithRetry(tmp: string, target: string, deps: AtomicDeps): Promise<void> {
+/** rename，遇 Windows 上常见的文件占用错误（EPERM/EACCES/EBUSY）短暂重试 */
+export async function renameWithRetry(tmp: string, target: string, deps: AtomicDeps = defaultDeps): Promise<void> {
   const started = deps.now();
   for (let attempt = 0; ; attempt += 1) {
     try {

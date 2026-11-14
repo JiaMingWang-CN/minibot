@@ -5,7 +5,7 @@ import { KernelError } from '../kernel.ts';
 import { FRAME_KK, FRAME_PAIR, SecureChannel, type Carrier } from './channel.ts';
 import { isRemoteAllowed } from './allowlist.ts';
 import { createHandshake, type Handshake } from './noise.ts';
-import { createOffer, MAX_PAIRING_FAILURES, PAIRING_TTL_MS, type ActiveOffer, type PairingOffer } from './pairing.ts';
+import { createOffer, PAIRING_TTL_MS, type ActiveOffer, type PairingOffer } from './pairing.ts';
 import { deviceIdOf, type RemoteStore } from './store.ts';
 
 // 远程网关：接住一条承载，完成 Noise 握手（配对 / 日常），之后在加密信道里
@@ -49,6 +49,10 @@ export interface GatewayOptions {
   minPhoneProtocol?: number;
   /** 本机版本号，随 version 消息发给手机 */
   appVersion?: string;
+}
+
+function isIncompatible(session: Session): boolean {
+  return session.version.compat === 'phone_outdated' || session.version.compat === 'pc_outdated';
 }
 
 export class RemoteGateway {
@@ -125,7 +129,7 @@ export class RemoteGateway {
   private validOffer(): ActiveOffer | null {
     const offer = this.offer;
     if (offer === null) return null;
-    if (this.now() >= offer.expiresAt || offer.failures >= MAX_PAIRING_FAILURES) return null;
+    if (this.now() >= offer.expiresAt) return null;
     return offer;
   }
 
@@ -134,6 +138,7 @@ export class RemoteGateway {
   async revoke(deviceId: string): Promise<boolean> {
     const removed = await this.store.removeDevice(deviceId);
     for (const session of [...(this.sessions.get(deviceId) ?? [])]) session.channel.close();
+    this.versions.delete(deviceId);
     this.notify();
     return removed;
   }
@@ -190,7 +195,7 @@ export class RemoteGateway {
       clearTimeout(timer);
       const { send, recv } = hs.split();
       const channel = new SecureChannel(carrier, send, recv);
-      this.startSession(channel, newDeviceId, via, pairedName);
+      this.startSession(channel, newDeviceId, via, pairedName, this.handshakeTimeoutMs);
     };
 
     const diag = this.kernel.diag;
@@ -200,10 +205,7 @@ export class RemoteGateway {
       } else {
         diag.write('warn', 'remote', 'handshake.failed', { via, reason });
       }
-      if (mode === 'pair' && offer !== null) {
-        offer.failures += 1;
-        if (offer.failures >= MAX_PAIRING_FAILURES && this.offer === offer) this.notify();
-      }
+      // 不按失败次数作废邀请：psk 是 256 位随机数，猜不出来，计数只会让旁人发几个垃圾帧就废掉邀请
       carrier.close();
     };
 
@@ -296,7 +298,13 @@ export class RemoteGateway {
     });
   }
 
-  private startSession(channel: SecureChannel, deviceId: string, via: 'lan' | 'relay', pairedName: string | null): void {
+  private startSession(
+    channel: SecureChannel,
+    deviceId: string,
+    via: 'lan' | 'relay',
+    pairedName: string | null,
+    establishTimeoutMs: number,
+  ): void {
     // 每次新连接都从 unknown 开始，不能沿用上一次的兼容结果；只保留上次报告过的版本号
     const known = this.versions.get(deviceId);
     const session: Session = {
@@ -305,25 +313,58 @@ export class RemoteGateway {
       unsubscribe: () => {},
       version: { appVersion: known?.appVersion ?? null, compat: 'unknown' },
     };
-    // 新会话先显示 unknown，等手机的 version 到达再判定
-    this.versions.set(deviceId, session.version);
-    let set = this.sessions.get(deviceId);
-    if (set === undefined) {
-      set = new Set();
-      this.sessions.set(deviceId, set);
-    }
-    set.add(session);
-
-    channel.onClose(() => {
-      session.unsubscribe();
-      set.delete(session);
-      if (set.size === 0) this.sessions.delete(deviceId);
-      else this.refreshDeviceVersion(deviceId, set);
+    let established = false;
+    // 注册会话：显示在线、记录最后在线时间、订阅内核事件
+    const establish = (): void => {
+      if (established || this.closed) return;
+      established = true;
+      if (this.store.findDevice(deviceId) === null) {
+        // 握手之后设备被撤销
+        channel.close();
+        return;
+      }
+      // 新会话先显示 unknown，等手机的 version 到达再判定
+      this.versions.set(deviceId, session.version);
+      let set = this.sessions.get(deviceId);
+      if (set === undefined) {
+        set = new Set();
+        this.sessions.set(deviceId, set);
+      }
+      const live = set;
+      live.add(session);
+      closeLive = () => {
+        session.unsubscribe();
+        live.delete(session);
+        if (live.size === 0) this.sessions.delete(deviceId);
+        else this.refreshDeviceVersion(deviceId, live);
+        this.notify();
+      };
+      void this.store.touch(deviceId, via).catch(() => {});
+      session.unsubscribe = this.kernel.on((event) => {
+        if (event.type === 'memory_changed' || isIncompatible(session)) return;
+        channel.send({ t: 'evt', event });
+      });
       this.notify();
+    };
+    let closeLive: (() => void) | null = null;
+    // 日常连接的 KK msg1 可被旁人原样重放（对方解不开后续密文，但会占住资源、伪造在线）：
+    // 握手后先不算会话建立，等收到并成功解密手机的第一个数据帧再注册。配对是一次性邀请，没有这个问题。
+    const timer = setTimeout(() => channel.close(), establishTimeoutMs);
+    timer.unref();
+    channel.onClose(() => {
+      clearTimeout(timer);
+      closeLive?.();
     });
-    channel.onMessage((message) => this.handleMessage(channel, session, message));
+    channel.onMessage((message) => {
+      if (!established) {
+        clearTimeout(timer);
+        establish();
+        if (!established || this.closed) return;
+      }
+      this.handleMessage(channel, session, message);
+    });
+    if (pairedName !== null) establish();
 
-    void this.store.touch(deviceId, via).catch(() => {});
     if (pairedName !== null) channel.send({ t: 'paired', deviceId });
     const config = this.store.config();
     channel.send({
@@ -339,11 +380,6 @@ export class RemoteGateway {
       protocol: REMOTE_PROTOCOL,
       minPeer: this.minPhoneProtocol,
     });
-    session.unsubscribe = this.kernel.on((event) => {
-      if (event.type === 'memory_changed') return;
-      channel.send({ t: 'evt', event });
-    });
-    this.notify();
   }
 
   // —— 会话内消息 ——
@@ -354,7 +390,7 @@ export class RemoteGateway {
     if (m['t'] === 'req') {
       void this.handleRequest(channel, session, m);
     } else if (m['t'] === 'ctl') {
-      this.handleControl(m['msg']);
+      if (!isIncompatible(session)) this.handleControl(m['msg']);
     } else if (m['t'] === 'version') {
       this.handleVersion(session, m);
     }
@@ -434,7 +470,7 @@ export class RemoteGateway {
       }
     };
 
-    if (session.version.compat === 'phone_outdated' || session.version.compat === 'pc_outdated') {
+    if (isIncompatible(session)) {
       reply({
         status: 409,
         json: { error: { code: 'incompatible', message: '两端版本不兼容，请更新后再试' } },

@@ -54,7 +54,9 @@ export async function readFile(
 ): Promise<ToolOutput> {
   let bytes: Buffer;
   try {
-    const { size } = await fs.stat(real);
+    const stat = await fs.stat(real);
+    if (!stat.isFile()) return fail('不是普通文件，无法读取。');
+    const { size } = stat;
     if (size > MAX_READ_BYTES) {
       return fail(`文件太大（${Math.ceil(size / 1024 / 1024)} MB，上限 ${MAX_READ_BYTES / 1024 / 1024} MB），请用 grep 搜索需要的部分。`);
     }

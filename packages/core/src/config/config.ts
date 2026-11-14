@@ -61,9 +61,28 @@ export async function loadConfigState(
     }
     throw err;
   }
-  const raw = JSON.parse(text);
-  const migrated = migrate(raw);
-  if (!('providers' in migrated)) throw new Error('config.json 不是应用配置');
+  // 损坏的配置（不是合法 JSON、结构不对）：先备份为 .bad 再用默认配置启动，与 extensions.json 一致
+  const recover = async (): Promise<{ config: AppConfig; diagnosticsMigrated: boolean }> => {
+    await fs.copyFile(p.config, `${p.config}.bad`).catch(() => {});
+    return { config: defaultConfig(), diagnosticsMigrated: false };
+  };
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return recover();
+  }
+  // 来自其他版本的配置不是损坏：拒绝启动，不能覆盖它
+  if (isRecord(raw) && typeof raw['schemaVersion'] === 'number' && raw['schemaVersion'] !== 1) {
+    throw new Error(`不支持的 schemaVersion：${String(raw['schemaVersion'])}`);
+  }
+  let migrated: AppConfig | Bot;
+  try {
+    migrated = migrate(raw);
+  } catch {
+    return recover();
+  }
+  if (!('providers' in migrated)) return recover();
   return { config: migrated, diagnosticsMigrated: !isRecord(isRecord(raw) ? raw['diagnostics'] : null) };
 }
 
@@ -75,6 +94,7 @@ export async function loadBot(p: DataPaths, id: string): Promise<Bot> {
   const text = await fs.readFile(p.botJson(id), 'utf8');
   const migrated = migrate(JSON.parse(text));
   if (!('id' in migrated) || 'providers' in migrated) throw new Error(`${p.botJson(id)} 不是 bot 配置`);
+  if (migrated.id !== id) throw new Error(`${p.botJson(id)} 里的 id 与目录名不一致`);
   return migrated;
 }
 
@@ -223,7 +243,15 @@ export function migrate(raw: unknown): AppConfig | Bot {
     throw new Error(`不支持的 schemaVersion：${String(raw['schemaVersion'])}`);
   }
   if (Array.isArray(raw['providers'])) {
-    const providers = raw['providers'].map((item, index) => migrateProvider(item, index));
+    // 单个 provider 条目非法时跳过该条，不让整个配置读不出来
+    const providers: Provider[] = [];
+    raw['providers'].forEach((item, index) => {
+      try {
+        providers.push(migrateProvider(item, index));
+      } catch (err) {
+        console.warn('跳过无法读取的 provider', err);
+      }
+    });
     const mainBotId = asString(raw['mainBotId']);
     let consolidationModel: AppConfig['consolidationModel'] = null;
     const cm = raw['consolidationModel'];

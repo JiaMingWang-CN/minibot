@@ -158,6 +158,18 @@ test('解析：没有结束标记就断开 → 抛 stream 错误并带上已收�
   assert.deepEqual(acc.result().blocks, [{ type: 'text', text: '半截' }]);
 });
 
+test('流里的 error 数据块 → 抛出带服务端信息的 stream 错误', async () => {
+  const acc = new ResultAccumulator(() => {});
+  const text =
+    'data: {"choices":[{"delta":{"content":"前半"}}]}\n\n' +
+    'data: {"error":{"message":"上游过载 overloaded","type":"server_error"}}\n\n';
+  await assert.rejects(chatCompletionsAdapter.parse(parseSse(chunks([text])), acc, 'm'), (err: unknown) => {
+    const e = err as { kind?: string; message?: string };
+    return e.kind === 'stream' && /overloaded/.test(e.message ?? '') && !/中途中断/.test(e.message ?? '');
+  });
+  assert.deepEqual(acc.result().blocks, [{ type: 'text', text: '前半' }]);
+});
+
 test('finish_reason length → max_tokens', async () => {
   const result = await runFixture('chat-length.sse');
   assert.equal(result.stopReason, 'max_tokens');

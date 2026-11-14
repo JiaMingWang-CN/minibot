@@ -141,6 +141,8 @@ export class TestPhone {
     const { send, recv } = hs.split();
     const phone = new TestPhone(keys, pcPublicKey, new SecureChannel(carrier, send, recv));
     await phone.ready;
+    // 真实手机收到 ready 后立刻发 version，电脑端以首个可解密的数据帧作为会话建立；这里发一条会被忽略的帧
+    phone.channel.send({ t: 'hello' });
     return phone;
   }
 

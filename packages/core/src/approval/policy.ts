@@ -12,7 +12,7 @@ export function decide(mode: ApprovalMode, tool: ToolName, classes: PathClass[])
   if (tool === 'run_command') return 'ask';
   if (classes.length === 0) return 'ask';
   if (READ_ONLY.has(tool)) {
-    return classes.every((c) => c === 'workspace' || c === 'own_memory') ? 'allow' : 'ask';
+    return classes.every((c) => c === 'workspace' || c === 'own_memory' || c === 'outputs') ? 'allow' : 'ask';
   }
   if (WRITE_TOOLS.has(tool)) {
     const allowed: PathClass[] = mode === 'edits' ? ['workspace', 'own_memory'] : ['own_memory'];

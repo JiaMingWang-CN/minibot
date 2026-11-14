@@ -90,3 +90,62 @@ test('relay-link 被同一身份顶替后退避重连，不永久停止', async 
     await relay.close();
   }
 });
+
+test('relay-link TCP 通但不回 WebSocket 升级：超时后报错并重连', async () => {
+  const { createServer } = await import('node:net');
+  let accepted = 0;
+  const sockets: { destroy(): void }[] = [];
+  const server = createServer((socket) => {
+    accepted += 1;
+    sockets.push(socket);
+    socket.on('error', () => {});
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  const states: { state: RelayLinkState; error: string | null }[] = [];
+  const link = new RelayLink({
+    url: `ws://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    token: 'x'.repeat(20),
+    identity: generateKeyPair(),
+    accept: () => {},
+    onState: (state, error) => states.push({ state, error }),
+    initialBackoffMs: 20,
+    connectTimeoutMs: 80,
+  });
+  try {
+    link.start();
+    await waitFor(() => states.some((s) => s.state === 'error'), 3000);
+    assert.equal(states.find((s) => s.state === 'error')!.error, '连接中继超时');
+    await waitFor(() => accepted >= 2, 3000);
+  } finally {
+    link.stop();
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test('relay-link 升级成功但一直没有 welcome：超时后断开重连', async () => {
+  const wss = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+  await new Promise<void>((resolve) => wss.once('listening', () => resolve()));
+  let connections = 0;
+  wss.on('connection', () => {
+    connections += 1;
+  });
+  const states: { state: RelayLinkState; error: string | null }[] = [];
+  const link = new RelayLink({
+    url: `ws://127.0.0.1:${(wss.address() as AddressInfo).port}`,
+    token: 'x'.repeat(20),
+    identity: generateKeyPair(),
+    accept: () => {},
+    onState: (state, error) => states.push({ state, error }),
+    initialBackoffMs: 20,
+    connectTimeoutMs: 80,
+  });
+  try {
+    link.start();
+    await waitFor(() => connections >= 2, 3000);
+    assert.ok(states.some((s) => s.state === 'error' && s.error === '连接中继超时'));
+  } finally {
+    link.stop();
+    await new Promise<void>((resolve) => wss.close(() => resolve()));
+  }
+});

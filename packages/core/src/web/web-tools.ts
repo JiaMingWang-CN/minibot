@@ -39,7 +39,9 @@ function webFetchTool(fetchImpl: (url: string, signal: AbortSignal) => Promise<S
       try {
         const result = await fetchImpl(String(input['url']), ctx.signal);
         const { title, markdown } = extractContent(result);
-        if (markdown.replace(/\s/g, '').length < MIN_BODY_CHARS) {
+        // 只有 HTML 才可能是“需要脚本渲染 / 被拦截”的空壳；短 JSON、短文本是正常内容
+        const isHtml = (result.contentType.split(';')[0] ?? '').trim().toLowerCase() === 'text/html';
+        if (isHtml && markdown.replace(/\s/g, '').length < MIN_BODY_CHARS) {
           return { content: '正文过短，可能是需要脚本渲染的动态页面或被拦截', isError: true };
         }
         const lines = [WEB_UNTRUSTED_NOTICE];

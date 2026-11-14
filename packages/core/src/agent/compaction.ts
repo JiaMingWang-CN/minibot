@@ -5,7 +5,7 @@ import type { Block, StoredMessage, Usage } from '../model/types.ts';
 import { appendMessage, getMessage, messagesFrom } from '../db/messages.ts';
 import { getThread, updateThread } from '../db/threads.ts';
 import type { KernelEvent } from '../events.ts';
-import { transcriptMessage } from './transcript.ts';
+import { transcriptMessage, transcriptOf } from './transcript.ts';
 
 export const TRIM_PLACEHOLDER = '[已省略历史工具输出]';
 export const SUMMARY_PREFIX = '以下是之前对话的摘要：';
@@ -16,6 +16,7 @@ const FULL_COMPACT_RATIO = 0.8;
 const MID_TURN_RATIO = 0.9;
 const TRIM_RATIO = 0.7;
 const KEEP_RATIO = 0.3;
+const SUMMARY_INPUT_RATIO = 0.7;
 
 export function estimateChars(text: string): number {
   const cjk = (text.match(/[\u3000-\u303f\u3400-\u9fff\uf900-\ufaff\uff00-\uffef]/g) ?? []).length;
@@ -117,6 +118,24 @@ function bodyFor(db: DatabaseSync, threadId: string, summaryMsgId: number | null
   );
 }
 
+/** 摘要请求自身不能超出窗口，否则压缩失败后每一轮都会再次失败：超预算时丢掉最早的内容（保留开头的旧摘要） */
+export function fitSummaryInput(messages: StoredMessage[], contextWindow: number): StoredMessage[] {
+  const budget = contextWindow * SUMMARY_INPUT_RATIO;
+  const size = (m: StoredMessage): number => estimateChars(transcriptOf([m]));
+  const head = messages[0]?.kind === 'summary' ? messages[0] : undefined;
+  const rest = head === undefined ? messages : messages.slice(1);
+  let sum = head === undefined ? 0 : size(head);
+  let start = rest.length;
+  for (let i = rest.length - 1; i >= 0; i -= 1) {
+    const s = size(rest[i]!);
+    if (start < rest.length && sum + s > budget) break;
+    sum += s;
+    start = i;
+  }
+  if (start === 0) return messages;
+  return head === undefined ? rest.slice(start) : [head, ...rest.slice(start)];
+}
+
 export async function compactThread(
   deps: CompactionDeps,
   bot: Bot,
@@ -139,7 +158,10 @@ export async function compactThread(
     boundaryIndex = bodyIndex === -1 ? combined.length : (summaryMessage === null ? 0 : 1) + bodyIndex;
   }
 
-  const toSummarize = combined.slice(0, boundaryIndex).filter((m) => m.kind !== 'notice');
+  const toSummarize = fitSummaryInput(
+    combined.slice(0, boundaryIndex).filter((m) => m.kind !== 'notice'),
+    bot.contextWindow,
+  );
   if (toSummarize.length === 0) return false;
   let summaryText = '';
   let summaryUsage: Usage | undefined;

@@ -72,7 +72,7 @@ import {
   estimateTokens,
   makePrepareContext,
 } from './agent/compaction.ts';
-import { buildTopicIndex } from './memory/topics.ts';
+import { buildTopicIndex, isValidTopicFile } from './memory/topics.ts';
 import { MemoryRevisions, type Revision } from './memory/revisions.ts';
 import { Consolidator } from './memory/consolidate.ts';
 import { SecretSet } from './secrets/redact.ts';
@@ -83,7 +83,7 @@ import { ToolCatalog, type ExternalTool, type TurnToolset } from './tools/catalo
 import { loadExtensions, saveExtensions, type WebSettings } from './extensions/store.ts';
 import { WebToolProvider } from './web/web-tools.ts';
 import { SearchToolProvider, searchServerId } from './web/search-tools.ts';
-import { loadMcpServers, saveMcpServers, materializeServer, parseMcpJson, assertUniqueServerName, type McpServerConfig, type McpServerDraft } from './mcp/config.ts';
+import { loadMcpServers, saveMcpServers, materializeServer, assertValidDraft, parseMcpJson, assertUniqueServerName, type McpServerConfig, type McpServerDraft } from './mcp/config.ts';
 import { McpManager, type McpServerState } from './mcp/manager.ts';
 import { McpToolProvider } from './mcp/tools.ts';
 import { McpOAuthProvider } from './mcp/oauth.ts';
@@ -234,6 +234,21 @@ export interface AddProviderInput {
   models?: CustomModel[];
 }
 
+function checkedBaseUrl(value: unknown): string {
+  if (typeof value !== 'string') throw new KernelError('invalid', 'baseUrl 必须是字符串');
+  const text = value.trim();
+  let url: URL;
+  try {
+    url = new URL(text);
+  } catch {
+    throw new KernelError('invalid', 'baseUrl 不是有效的网址');
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new KernelError('invalid', 'baseUrl 必须以 http:// 或 https:// 开头');
+  }
+  return text;
+}
+
 function currentUser(): string {
   try {
     return os.userInfo().username;
@@ -269,6 +284,7 @@ export class Kernel {
   private pendingJobs = new Set<Promise<void>>();
   private prepareContext!: TurnDeps['prepareContext'];
   private closed = false;
+  private onboarding = false;
   private retryDelaysMs: number[] | undefined;
   private appVersion: string | undefined;
   private collectUrl: string | null;
@@ -319,7 +335,9 @@ export class Kernel {
   }
 
   private async init(): Promise<void> {
-    await fs.mkdir(this.paths.root, { recursive: true });
+    // 数据目录只给当前用户（POSIX）：里面的文件按 umask 创建，靠目录权限挡住其他用户；Windows 不处理
+    await fs.mkdir(this.paths.root, { recursive: true, mode: 0o700 });
+    if (process.platform !== 'win32') await fs.chmod(this.paths.root, 0o700).catch(() => {});
     // 用真实路径作为所有比对的基准：数据目录或主目录位于链接之后时，敏感路径、记忆白名单与修订记录仍然一致
     this.paths = dataPaths(await fs.realpath(this.paths.root));
     try {
@@ -400,9 +418,12 @@ export class Kernel {
           (await this.pluginService.installed()).some((plugin) => plugin.name === name && plugin.enabled),
       }),
     );
-    void this.mcp.start();
+    this.mcp.start().catch((err: unknown) => console.warn('MCP 服务启动失败', err));
     this.secretStore.registerEnv(this.envKeyNames());
     this.db = openDb(this.paths.db);
+    if (process.platform !== 'win32') {
+      for (const suffix of ['', '-wal', '-shm']) await fs.chmod(`${this.paths.db}${suffix}`, 0o600).catch(() => {});
+    }
     repairDanglingToolUses(this.db);
     closeDangling(this.db);
     this.osName = `${this.platform} ${os.release()}`;
@@ -711,12 +732,15 @@ export class Kernel {
     if (i.format !== 'chat_completions' && i.format !== 'responses' && i.format !== 'anthropic_messages') {
       throw new KernelError('invalid', '供应商格式无效');
     }
-    if (typeof i.baseUrl !== 'string') throw new KernelError('invalid', 'baseUrl 必须是字符串');
+    const baseUrl = checkedBaseUrl(i.baseUrl);
     if (i.presetId !== undefined && !listPresets().some((p) => p.id === i.presetId)) {
       throw new KernelError('invalid', '预设不存在');
     }
-    if (i.apiKeyEnv !== undefined && i.apiKeyEnv.length === 0) {
+    if (i.apiKeyEnv !== undefined && (typeof i.apiKeyEnv !== 'string' || i.apiKeyEnv.length === 0)) {
       throw new KernelError('invalid', '环境变量名不能为空');
+    }
+    if (i.apiKey !== undefined && typeof i.apiKey !== 'string') {
+      throw new KernelError('invalid', 'apiKey 必须是字符串');
     }
     if (i.apiKey !== undefined && i.apiKey.length > 0 && !this.secretStore.canPersist()) {
       throw new KernelError('key_not_persistable', '当前系统没有可用的密钥库，无法保存 API Key');
@@ -726,7 +750,7 @@ export class Kernel {
       id: randomUUID(),
       name: i.name,
       format: i.format,
-      baseUrl: i.baseUrl,
+      baseUrl,
     };
     if (i.apiKeyEnv !== undefined) provider.apiKeyEnv = i.apiKeyEnv;
     if (i.presetId !== undefined) provider.presetId = i.presetId;
@@ -735,7 +759,14 @@ export class Kernel {
       await this.secretStore.set(provider.id, i.apiKey);
     }
     this.config.providers.push(provider);
-    await saveConfig(this.paths, this.config);
+    try {
+      await saveConfig(this.paths, this.config);
+    } catch (err) {
+      // 配置没写成：撤销内存里的改动和刚存的密钥，不留下没有供应商的孤儿密钥
+      this.config.providers.pop();
+      await this.secretStore.delete(provider.id).catch(() => {});
+      throw err;
+    }
     if (provider.apiKeyEnv !== undefined) this.secretStore.registerEnv([provider.apiKeyEnv]);
     return provider;
   }
@@ -748,7 +779,9 @@ export class Kernel {
     // 先在副本上校验并修改，全部通过后才替换；中途失败不会留下改了一半的内存状态
     const provider: Provider = { ...current };
     if (patch.name !== undefined) {
-      if (patch.name.trim().length === 0) throw new KernelError('invalid', '供应商名称不能为空');
+      if (typeof patch.name !== 'string' || patch.name.trim().length === 0) {
+        throw new KernelError('invalid', '供应商名称不能为空');
+      }
       provider.name = patch.name;
     }
     if (patch.format !== undefined) {
@@ -762,8 +795,7 @@ export class Kernel {
       provider.format = patch.format;
     }
     if (patch.baseUrl !== undefined) {
-      if (typeof patch.baseUrl !== 'string') throw new KernelError('invalid', 'baseUrl 必须是字符串');
-      provider.baseUrl = patch.baseUrl;
+      provider.baseUrl = checkedBaseUrl(patch.baseUrl);
     }
     // 空字符串表示清除环境变量，改回使用保存的 Key
     if (patch.apiKeyEnv !== undefined) {
@@ -778,14 +810,23 @@ export class Kernel {
       provider.presetId = patch.presetId;
     }
     if (patch.models !== undefined) provider.models = checkedModels(patch.models);
+    if (patch.apiKey !== undefined && typeof patch.apiKey !== 'string') {
+      throw new KernelError('invalid', 'apiKey 必须是字符串');
+    }
     const newKey = patch.apiKey !== undefined && patch.apiKey.length > 0 ? patch.apiKey : undefined;
     if (newKey !== undefined && !this.secretStore.canPersist()) {
       throw new KernelError('key_not_persistable', '当前系统没有可用的密钥库，无法保存 API Key');
     }
     if (newKey !== undefined) await this.secretStore.set(provider.id, newKey);
     if (provider.apiKeyEnv !== undefined) this.secretStore.registerEnv([provider.apiKeyEnv]);
-    this.config.providers[this.config.providers.indexOf(current)] = provider;
-    await saveConfig(this.paths, this.config);
+    const index = this.config.providers.indexOf(current);
+    this.config.providers[index] = provider;
+    try {
+      await saveConfig(this.paths, this.config);
+    } catch (err) {
+      this.config.providers[index] = current;
+      throw err;
+    }
     return { ...provider };
   }
 
@@ -822,8 +863,32 @@ export class Kernel {
   }
 
   async completeOnboarding(i: OnboardingInput): Promise<Bot> {
-    if (this.config.mainBotId !== null) throw new KernelError('invalid', '已经完成初始化');
+    if (this.config.mainBotId !== null || this.onboarding) throw new KernelError('invalid', '已经完成初始化');
     const provider = this.providerOrThrow(i.providerId);
+    if (typeof i.model !== 'string' || i.model.trim().length === 0) {
+      throw new KernelError('invalid', '模型不能为空');
+    }
+    for (const key of ['name', 'persona', 'profile', 'workspace'] as const) {
+      const value: unknown = i[key];
+      if (value !== undefined && typeof value !== 'string') {
+        throw new KernelError('invalid', `${key} 必须是字符串`);
+      }
+    }
+    if (i.contextWindow !== undefined && (!Number.isFinite(i.contextWindow) || i.contextWindow <= 0)) {
+      throw new KernelError('invalid', '上下文窗口必须是正数');
+    }
+    if (i.workspace !== undefined && i.workspace.trim().length > 0 && !path.isAbsolute(i.workspace.trim())) {
+      throw new KernelError('invalid', '工作目录必须是绝对路径');
+    }
+    this.onboarding = true;
+    try {
+      return await this.createMainBot(i, provider);
+    } finally {
+      this.onboarding = false;
+    }
+  }
+
+  private async createMainBot(i: OnboardingInput, provider: Provider): Promise<Bot> {
     const picked = randomPersona();
     const bot: Bot = {
       schemaVersion: 1,
@@ -934,6 +999,12 @@ export class Kernel {
         throw new KernelError('invalid', `${key} 必须是字符串`);
       }
     }
+    if (patch.name !== undefined && patch.name.trim().length === 0) {
+      throw new KernelError('invalid', 'bot 名称不能为空');
+    }
+    if (patch.model !== undefined && patch.model.trim().length === 0) {
+      throw new KernelError('invalid', '模型不能为空');
+    }
     if (patch.name !== undefined) bot.name = patch.name;
     if (patch.persona !== undefined) bot.persona = patch.persona;
     if (patch.providerId !== undefined) bot.providerId = patch.providerId;
@@ -1013,10 +1084,10 @@ export class Kernel {
   /** 删除线程：先中止正在运行与排队的任务（含待审批），等它们结束后删消息、线程与图片附件 */
   async deleteThread(threadId: string): Promise<void> {
     this.threadOrThrow(threadId);
-    this.steer.delete(threadId);
+    await this.dropSteer(threadId);
     this.queue.abortThread(threadId);
     await this.queue.whenIdle(threadId);
-    this.steer.delete(threadId);
+    await this.dropSteer(threadId);
     if (getThread(this.db, threadId) === null) return;
     // 删消息与删线程行在一个事务里；deleteMessagesFrom 发现已在事务中会直接执行
     const removed = inTransaction(this.db, () => {
@@ -1027,6 +1098,13 @@ export class Kernel {
     this.trackers.delete(threadId);
     await this.removeAttachments(removed);
     this.emit({ type: 'thread_deleted', threadId });
+  }
+
+  /** 丢掉线程里还没插入的插话，连同它们已写盘的图片附件（不然成了没人引用的孤儿文件） */
+  private async dropSteer(threadId: string): Promise<void> {
+    const items = this.steer.get(threadId);
+    this.steer.delete(threadId);
+    if (items !== undefined) await this.removeAttachments(items.map((blocks) => ({ blocks })));
   }
 
   listMessages(threadId: string, before?: number, limit?: number): StoredMessage[] {
@@ -1142,7 +1220,25 @@ export class Kernel {
     const job = this.queue.enqueue(threadId, async (signal) => {
       const thread = getThread(this.db, threadId);
       if (thread === null) return;
-      const bot = await this.loadBotOrThrow(thread.botId);
+      let bot: Bot;
+      try {
+        bot = await this.loadBotOrThrow(thread.botId);
+      } catch (err) {
+        // 接口已经回了 ok：读不到 bot 时给对话里留一条提示，不让这条消息无声消失
+        const message = err instanceof Error ? err.message : String(err);
+        const notice = appendMessage(this.db, {
+          threadId,
+          role: 'user',
+          blocks: [{ type: 'text', text: `消息未能发送：${this.secretSet.redact(message)}` }],
+          kind: 'notice',
+          interrupted: false,
+        });
+        this.emit({ type: 'message', threadId, message: notice });
+        if (typeof input === 'object' && 'blocks' in input) {
+          void this.removeAttachments([{ blocks: input.blocks }]);
+        }
+        return;
+      }
       this.activeTurns.add(threadId);
       try {
         await runTurn(
@@ -1190,7 +1286,7 @@ export class Kernel {
       throw new KernelError('invalid', `每条消息最多 ${MAX_IMAGES_PER_MESSAGE} 张图片`);
     }
     const decoded = images.map((image) => {
-      if (typeof image !== 'object' || image === null || !(image.mediaType in IMAGE_EXT)) {
+      if (typeof image !== 'object' || image === null || !Object.hasOwn(IMAGE_EXT, image.mediaType)) {
         throw new KernelError('invalid', '图片格式只支持 PNG、JPEG、GIF、WebP');
       }
       if (typeof image.data !== 'string' || image.data.length % 4 !== 0 || !BASE64_RE.test(image.data)) {
@@ -1239,7 +1335,7 @@ export class Kernel {
     return out;
   }
 
-  private async removeAttachments(messages: StoredMessage[]): Promise<void> {
+  private async removeAttachments(messages: { blocks: Block[] }[]): Promise<void> {
     for (const message of messages) {
       for (const block of message.blocks) {
         if (block.type !== 'image' || !UUID_RE.test(block.id)) continue;
@@ -1289,6 +1385,15 @@ export class Kernel {
       signal,
       supportsImages,
       childEnv: this.childEnv(),
+      // 审批模式读最新配置：用户中途改了模式，本轮后续的工具调用立即按新模式判断
+      approvalMode: () =>
+        withPathLock(this.paths.botJson(bot.id), async () => {
+          try {
+            return (await this.loadBotOrThrow(bot.id)).approvalMode;
+          } catch {
+            return bot.approvalMode;
+          }
+        }),
       // 读最新配置：本轮中途刚勾选“总是允许”的命令也能生效
       // 与“总是允许”的保存共用同一把锁，排在保存之后读，批准后紧接着的同一条命令不会重复询问
       isCommandAllowed: (command) =>
@@ -1458,6 +1563,13 @@ export class Kernel {
     if (!this.revisions.isTracked(real)) {
       throw new KernelError('invalid', '只能写入记忆文件');
     }
+    // 与 AI 写记忆一致：主题文件必须是记忆目录下一级的合法 .md
+    if (real !== path.resolve(this.paths.userMd)) {
+      const dir = path.dirname(real);
+      if (path.basename(dir) !== 'memory' || !isValidTopicFile(real, dir)) {
+        throw new KernelError('invalid', '记忆主题文件必须是记忆目录下的 .md 文件');
+      }
+    }
     if (this.secretSet.containsKnown(content)) {
       throw new KernelError('invalid', '记忆与用户画像中不得包含 API Key。');
     }
@@ -1569,54 +1681,70 @@ export class Kernel {
   }
 
   async addMcpServer(draft: McpServerDraft): Promise<McpServerConfig> {
-    if (typeof draft?.name !== 'string' || draft.name.trim().length === 0) {
-      throw new KernelError('invalid', 'MCP server 名称不能为空');
-    }
-    const servers = await loadMcpServers(this.paths);
-    try {
-      assertUniqueServerName(servers, draft.name);
-    } catch (err) {
-      throw new KernelError('invalid', err instanceof Error ? err.message : String(err));
-    }
-    const { config, secrets } = materializeServer(randomUUID(), draft);
-    if (secrets.length > 0 && !this.secretStore.canPersist()) {
-      throw new KernelError('key_not_persistable', '当前系统没有可用的密钥库，无法保存这个 MCP server 的密钥');
-    }
-    for (const entry of secrets) await this.secretStore.set(entry.key, entry.value);
-    await saveMcpServers(this.paths, [...servers, config]);
+    this.checkMcpDraft(draft);
+    // 读改写在 extensions.json 的锁里，并发增删不丢更新
+    const config = await withPathLock(this.paths.extensionsJson, async () => {
+      const servers = await loadMcpServers(this.paths);
+      try {
+        assertUniqueServerName(servers, draft.name);
+      } catch (err) {
+        throw new KernelError('invalid', err instanceof Error ? err.message : String(err));
+      }
+      const { config, secrets } = materializeServer(randomUUID(), draft);
+      if (secrets.length > 0 && !this.secretStore.canPersist()) {
+        throw new KernelError('key_not_persistable', '当前系统没有可用的密钥库，无法保存这个 MCP server 的密钥');
+      }
+      for (const entry of secrets) await this.secretStore.set(entry.key, entry.value);
+      await saveMcpServers(this.paths, [...servers, config]);
+      return config;
+    });
     await this.enableForMainBot('mcpServers', config.id);
     void this.mcp.connect(config.id).catch(() => {});
     return config;
   }
 
-  async updateMcpServer(id: string, draft: McpServerDraft): Promise<McpServerConfig> {
-    const servers = await loadMcpServers(this.paths);
-    const existing = servers.find((s) => s.id === id);
-    if (existing === undefined) throw new KernelError('not_found', `MCP server ${id} 不存在`);
+  private checkMcpDraft(draft: McpServerDraft): void {
     try {
-      assertUniqueServerName(servers.filter((s) => s.id !== id), draft.name);
+      assertValidDraft(draft);
     } catch (err) {
       throw new KernelError('invalid', err instanceof Error ? err.message : String(err));
     }
-    const { config, secrets } = materializeServer(id, draft);
-    if (secrets.length > 0 && !this.secretStore.canPersist()) {
-      throw new KernelError('key_not_persistable', '当前系统没有可用的密钥库，无法保存这个 MCP server 的密钥');
-    }
-    for (const key of Kernel.mcpSecretKeys(existing)) await this.secretStore.delete(key);
-    for (const entry of secrets) await this.secretStore.set(entry.key, entry.value);
-    await saveMcpServers(this.paths, servers.map((s) => (s.id === id ? config : s)));
+  }
+
+  async updateMcpServer(id: string, draft: McpServerDraft): Promise<McpServerConfig> {
+    this.checkMcpDraft(draft);
+    const config = await withPathLock(this.paths.extensionsJson, async () => {
+      const servers = await loadMcpServers(this.paths);
+      const existing = servers.find((s) => s.id === id);
+      if (existing === undefined) throw new KernelError('not_found', `MCP server ${id} 不存在`);
+      try {
+        assertUniqueServerName(servers.filter((s) => s.id !== id), draft.name);
+      } catch (err) {
+        throw new KernelError('invalid', err instanceof Error ? err.message : String(err));
+      }
+      const { config, secrets } = materializeServer(id, draft);
+      if (secrets.length > 0 && !this.secretStore.canPersist()) {
+        throw new KernelError('key_not_persistable', '当前系统没有可用的密钥库，无法保存这个 MCP server 的密钥');
+      }
+      for (const key of Kernel.mcpSecretKeys(existing)) await this.secretStore.delete(key);
+      for (const entry of secrets) await this.secretStore.set(entry.key, entry.value);
+      await saveMcpServers(this.paths, servers.map((s) => (s.id === id ? config : s)));
+      return config;
+    });
     void this.mcp.connect(id).catch(() => {});
     return config;
   }
 
   async deleteMcpServer(id: string): Promise<void> {
-    const servers = await loadMcpServers(this.paths);
-    const existing = servers.find((s) => s.id === id);
-    if (existing === undefined) throw new KernelError('not_found', `MCP server ${id} 不存在`);
-    await this.mcp.disconnect(id).catch(() => {});
-    for (const key of Kernel.mcpSecretKeys(existing)) await this.secretStore.delete(key);
-    await this.removeFromAllBots('mcpServers', id);
-    await saveMcpServers(this.paths, servers.filter((s) => s.id !== id));
+    await withPathLock(this.paths.extensionsJson, async () => {
+      const servers = await loadMcpServers(this.paths);
+      const existing = servers.find((s) => s.id === id);
+      if (existing === undefined) throw new KernelError('not_found', `MCP server ${id} 不存在`);
+      await this.mcp.disconnect(id).catch(() => {});
+      for (const key of Kernel.mcpSecretKeys(existing)) await this.secretStore.delete(key);
+      await this.removeFromAllBots('mcpServers', id);
+      await saveMcpServers(this.paths, servers.filter((s) => s.id !== id));
+    });
   }
 
   async connectMcpServer(id: string): Promise<void> {
@@ -1762,6 +1890,15 @@ export class Kernel {
   }
 
   async updateSettings(s: { consolidationModel: AppConfig['consolidationModel'] }): Promise<void> {
+    const cm: unknown = s?.consolidationModel;
+    if (cm !== null) {
+      const ok =
+        typeof cm === 'object' &&
+        typeof (cm as Record<string, unknown>)['providerId'] === 'string' &&
+        typeof (cm as Record<string, unknown>)['model'] === 'string' &&
+        ((cm as Record<string, unknown>)['model'] as string).trim().length > 0;
+      if (!ok) throw new KernelError('invalid', '后台整理模型格式无效');
+    }
     if (s.consolidationModel !== null && this.findProvider(s.consolidationModel.providerId) === undefined) {
       throw new KernelError('invalid', '后台整理供应商不存在');
     }
@@ -1839,6 +1976,7 @@ export class Kernel {
     this.uploader.close();
     this.queue.abortAll();
     await Promise.allSettled([...this.pendingJobs]);
+    for (const threadId of [...this.steer.keys()]) await this.dropSteer(threadId);
     await this.mcp.stop();
     // 整理在数据库关闭后还可能写记忆文件：先中止并等它结束
     await this.consolidator.stop();

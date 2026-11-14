@@ -22,7 +22,7 @@ async function localRequest(method: string, path: string, body: unknown): Promis
   if (method === 'PUT' && path === '/api/diagnostics') {
     const consent = input['consent'];
     if (consent !== 'on' && consent !== 'off') {
-      return { status: 400, json: { error: { code: 'invalid', message: 'consent 必须是 on 或 off' } } };
+      return { status: 400, json: { error: { code: 'invalid', message: t('mobile.consentInvalid') } } };
     }
     await MinibotRemote.setDiagnostics({ consent });
     return { status: 200, json: { ok: true } };
@@ -89,6 +89,7 @@ export function nativeEvents(onEvent: (event: KernelEvent) => void): EventConnec
     },
     send(message: ClientMessage) {
       void MinibotRemote.sendControl({ msg: message }).catch(() => {});
+      return true;
     },
     close() {
       for (const handle of handles) void handle.then((h) => h.remove());

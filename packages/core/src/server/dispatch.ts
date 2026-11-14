@@ -62,6 +62,15 @@ function stringField(body: Record<string, unknown>, key: string): string {
   return value;
 }
 
+/** 路径段解码：畸形的 % 编码按 400 处理，不要冒成 500 */
+function decodeSegment(raw: string): string {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    throw new KernelError('invalid', '路径参数编码无效');
+  }
+}
+
 function optionalNumber(raw: string | null): number | undefined {
   if (raw === null || raw.length === 0) return undefined;
   const value = Number(raw);
@@ -157,7 +166,7 @@ async function route(kernel: Kernel, req: ApiRequest, ctx: DispatchContext): Pro
   }
   const mcpOne = /^\/api\/mcp\/servers\/([^/]+)$/.exec(pathname);
   if (mcpOne !== null) {
-    const id = decodeURIComponent(mcpOne[1]!);
+    const id = decodeSegment(mcpOne[1]!);
     if (method === 'PATCH') {
       const body = objectBody(await req.readBody(MAX_BODY_BYTES));
       return json(200, await kernel.updateMcpServer(id, body as unknown as Parameters<Kernel['updateMcpServer']>[1]));
@@ -169,7 +178,7 @@ async function route(kernel: Kernel, req: ApiRequest, ctx: DispatchContext): Pro
   }
   const mcpAction = /^\/api\/mcp\/servers\/([^/]+)\/(connect|refresh|login|logout)$/.exec(pathname);
   if (mcpAction !== null && method === 'POST') {
-    const id = decodeURIComponent(mcpAction[1]!);
+    const id = decodeSegment(mcpAction[1]!);
     const action = mcpAction[2]!;
     if (action === 'connect') await kernel.connectMcpServer(id);
     else if (action === 'refresh') await kernel.refreshMcpServer(id);
@@ -180,7 +189,7 @@ async function route(kernel: Kernel, req: ApiRequest, ctx: DispatchContext): Pro
   if (method === 'PUT' && pathname === '/api/settings') {
     const body = objectBody(await req.readBody(MAX_BODY_BYTES));
     const value = body['consolidationModel'];
-    if (value !== null && (typeof value !== 'object' || value === undefined)) {
+    if (value !== null && (typeof value !== 'object' || Array.isArray(value))) {
       throw new KernelError('invalid', 'consolidationModel 无效');
     }
     await kernel.updateSettings({
@@ -291,7 +300,7 @@ async function route(kernel: Kernel, req: ApiRequest, ctx: DispatchContext): Pro
   {
     const pluginAction = /^\/api\/plugins\/([^/]+)\/(connect|prepare-update)$/.exec(pathname);
     if (pluginAction !== null && method === 'POST') {
-      const name = decodeURIComponent(pluginAction[1]!);
+      const name = decodeSegment(pluginAction[1]!);
       const body = objectBody(await req.readBody(MAX_BODY_BYTES));
       if (pluginAction[2] === 'connect') {
         const values = body['values'];
@@ -305,7 +314,7 @@ async function route(kernel: Kernel, req: ApiRequest, ctx: DispatchContext): Pro
     }
     const pluginOne = /^\/api\/plugins\/([^/]+)$/.exec(pathname);
     if (pluginOne !== null) {
-      const name = decodeURIComponent(pluginOne[1]!);
+      const name = decodeSegment(pluginOne[1]!);
       if (method === 'PATCH') {
         const body = objectBody(await req.readBody(MAX_BODY_BYTES));
         if (typeof body['enabled'] !== 'boolean') throw new KernelError('invalid', 'enabled 必须是布尔值');
@@ -330,20 +339,20 @@ async function route(kernel: Kernel, req: ApiRequest, ctx: DispatchContext): Pro
   {
     const skillOne = /^\/api\/skills\/(.+)$/.exec(pathname);
     if (skillOne !== null && method === 'DELETE') {
-      await kernel.removeSkill(decodeURIComponent(skillOne[1]!));
+      await kernel.removeSkill(decodeSegment(skillOne[1]!));
       return json(200, { ok: true });
     }
   }
   {
     const botSkills = /^\/api\/bots\/([^/]+)\/skills$/.exec(pathname);
     if (botSkills !== null && method === 'GET') {
-      return json(200, { skills: await kernel.botSkills(decodeURIComponent(botSkills[1]!)) });
+      return json(200, { skills: await kernel.botSkills(decodeSegment(botSkills[1]!)) });
     }
   }
 
   let match = /^\/api\/providers\/([^/]+)$/.exec(pathname);
   if (match !== null) {
-    const id = decodeURIComponent(match[1]!);
+    const id = decodeSegment(match[1]!);
     if (method === 'PATCH') {
       const body = objectBody(await req.readBody(MAX_BODY_BYTES));
       return json(200, await kernel.updateProvider(id, body));
@@ -356,7 +365,7 @@ async function route(kernel: Kernel, req: ApiRequest, ctx: DispatchContext): Pro
 
   match = /^\/api\/providers\/([^/]+)\/test$/.exec(pathname);
   if (match !== null && method === 'POST') {
-    const id = decodeURIComponent(match[1]!);
+    const id = decodeSegment(match[1]!);
     const body = objectBody(await req.readBody(MAX_BODY_BYTES));
     const model = stringField(body, 'model');
     return json(200, await kernel.testProvider(id, model));
@@ -364,14 +373,14 @@ async function route(kernel: Kernel, req: ApiRequest, ctx: DispatchContext): Pro
 
   match = /^\/api\/bots\/([^/]+)$/.exec(pathname);
   if (match !== null && method === 'PATCH') {
-    const id = decodeURIComponent(match[1]!);
+    const id = decodeSegment(match[1]!);
     const body = objectBody(await req.readBody(MAX_BODY_BYTES));
     return json(200, await kernel.updateBot(id, body));
   }
 
   match = /^\/api\/bots\/([^/]+)\/threads$/.exec(pathname);
   if (match !== null) {
-    const id = decodeURIComponent(match[1]!);
+    const id = decodeSegment(match[1]!);
     if (method === 'GET') {
       return json(200, kernel.listThreads(id));
     }
@@ -382,13 +391,13 @@ async function route(kernel: Kernel, req: ApiRequest, ctx: DispatchContext): Pro
 
   match = /^\/api\/bots\/([^/]+)\/memory$/.exec(pathname);
   if (match !== null && method === 'GET') {
-    const id = decodeURIComponent(match[1]!);
+    const id = decodeSegment(match[1]!);
     return json(200, await kernel.listMemory(id));
   }
 
   match = /^\/api\/threads\/([^/]+)\/messages$/.exec(pathname);
   if (match !== null) {
-    const id = decodeURIComponent(match[1]!);
+    const id = decodeSegment(match[1]!);
     if (method === 'GET') {
       const before = optionalNumber(url.searchParams.get('before'));
       const limit = optionalNumber(url.searchParams.get('limit'));
@@ -413,7 +422,7 @@ async function route(kernel: Kernel, req: ApiRequest, ctx: DispatchContext): Pro
 
   match = /^\/api\/threads\/([^/]+)$/.exec(pathname);
   if (match !== null) {
-    const id = decodeURIComponent(match[1]!);
+    const id = decodeSegment(match[1]!);
     if (method === 'GET') {
       return json(200, kernel.thread(id));
     }
@@ -429,18 +438,18 @@ async function route(kernel: Kernel, req: ApiRequest, ctx: DispatchContext): Pro
 
   match = /^\/api\/threads\/([^/]+)\/retry$/.exec(pathname);
   if (match !== null && method === 'POST') {
-    kernel.retry(decodeURIComponent(match[1]!));
+    kernel.retry(decodeSegment(match[1]!));
     return json(200, { ok: true });
   }
 
   match = /^\/api\/threads\/([^/]+)\/usage$/.exec(pathname);
   if (match !== null && method === 'GET') {
-    return json(200, kernel.threadUsage(decodeURIComponent(match[1]!)));
+    return json(200, kernel.threadUsage(decodeSegment(match[1]!)));
   }
 
   match = /^\/api\/attachments\/([^/]+)$/.exec(pathname);
   if (match !== null && method === 'GET') {
-    const file = await kernel.readAttachment(decodeURIComponent(match[1]!));
+    const file = await kernel.readAttachment(decodeSegment(match[1]!));
     return {
       status: 200,
       bytes: file.data,
@@ -451,13 +460,13 @@ async function route(kernel: Kernel, req: ApiRequest, ctx: DispatchContext): Pro
 
   match = /^\/api\/threads\/([^/]+)\/context$/.exec(pathname);
   if (match !== null && method === 'GET') {
-    const id = decodeURIComponent(match[1]!);
+    const id = decodeSegment(match[1]!);
     return json(200, await kernel.contextUsage(id));
   }
 
   match = /^\/api\/threads\/([^/]+)\/compact$/.exec(pathname);
   if (match !== null && method === 'POST') {
-    const id = decodeURIComponent(match[1]!);
+    const id = decodeSegment(match[1]!);
     kernel.compact(id);
     return json(200, { ok: true });
   }
@@ -475,7 +484,7 @@ async function route(kernel: Kernel, req: ApiRequest, ctx: DispatchContext): Pro
 
   match = /^\/api\/memory\/revisions\/([^/]+)\/revert$/.exec(pathname);
   if (match !== null && method === 'POST') {
-    const revisionId = Number(decodeURIComponent(match[1]!));
+    const revisionId = Number(decodeSegment(match[1]!));
     if (!Number.isInteger(revisionId)) throw new KernelError('invalid', '修订 id 无效');
     await kernel.revert(revisionId);
     return json(200, { ok: true });
@@ -505,7 +514,7 @@ async function remoteRoute(remote: RemoteService | undefined, req: ApiRequest): 
   }
   const match = /^\/api\/remote\/devices\/([^/]+)$/.exec(pathname);
   if (match !== null && method === 'DELETE') {
-    return json(200, await remote.revoke(decodeURIComponent(match[1]!)));
+    return json(200, await remote.revoke(decodeSegment(match[1]!)));
   }
   return notFound();
 }

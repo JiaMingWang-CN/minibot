@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseSse, type SseEvent } from '../src/model/sse.ts';
 import { newToolUseId } from '../src/model/ids.ts';
+import { INVALID_ARGS_KEY } from '../src/model/adapter.ts';
 import { ResultAccumulator } from '../src/model/accumulator.ts';
 
 async function* chunks(parts: string[]): AsyncGenerator<Uint8Array> {
@@ -39,12 +40,15 @@ test('ID 字符集', () => {
   assert.match(newToolUseId(), /^tu_[A-Za-z0-9]{24}$/);
 });
 
-test('snapshot 丢弃参数 JSON 不完整的 tool_use', () => {
+test('参数 JSON 不完整的 tool_use：partial 快照里丢弃，最终结果里保留并带上无法解析的标记', () => {
   const acc = new ResultAccumulator(() => {});
   acc.toolStart('0', 'read_file');
   acc.toolArgs('0', '{"pa');
   assert.deepEqual(acc.snapshot(), []);
-  assert.deepEqual(acc.result().blocks, []);
+  const blocks = acc.result().blocks;
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0]!.type, 'tool_use');
+  assert.deepEqual((blocks[0] as { input: unknown }).input, { [INVALID_ARGS_KEY]: '{"pa' });
 });
 
 test('tool_use 用 minibot 自己生成的 id', () => {

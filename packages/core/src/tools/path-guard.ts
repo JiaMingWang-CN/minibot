@@ -56,7 +56,7 @@ export function isInside(child: string, parent: string, platform: NodeJS.Platfor
   return c[p.length] === sep;
 }
 
-export type PathClass = 'sensitive' | 'own_memory' | 'workspace' | 'outside';
+export type PathClass = 'sensitive' | 'own_memory' | 'workspace' | 'outputs' | 'outside';
 
 export interface ClassifyContext {
   paths: DataPaths;
@@ -76,6 +76,8 @@ export function classifyPath(real: string, ctx: ClassifyContext): PathClass {
   if (isInside(real, ctx.paths.memoryDir(ctx.botId), platform)) return 'own_memory';
   // 本 bot 没设工作目录时用的默认工作区在数据目录里面，照常算工作区
   if (isInside(real, ctx.paths.defaultWorkspace(ctx.botId), platform)) return 'workspace';
+  // 超长输出的完整内容存在 outputs 目录，模型要能读回来（只读放行，写入仍要审批）
+  if (isInside(real, ctx.paths.outputs, platform)) return 'outputs';
   // 数据目录里其余一切（bot.json、devices.json、remote.json、数据库等）都敏感；
   // 必须先于“是否在工作区内”判断，否则工作区设成主目录时会把它们当普通文件
   if (isInside(real, ctx.paths.root, platform)) return 'sensitive';

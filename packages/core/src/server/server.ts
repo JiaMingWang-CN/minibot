@@ -10,6 +10,8 @@ import type { RemoteService } from '../remote/service.ts';
 import { handleApi, sendJson } from './routes.ts';
 
 const AUTH_TIMEOUT_MS = 5000;
+/** WebSocket 单帧上限：本机界面只发 auth / abort / approval 这类很小的消息 */
+const MAX_WS_FRAME_BYTES = 64 * 1024;
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -114,7 +116,14 @@ export async function startServer(kernel: Kernel, o: ServerOptions): Promise<Ser
         res.end('Forbidden');
         return;
       }
-      const url = new URL(req.url ?? '/', `http://${host}`);
+      let url: URL;
+      try {
+        url = new URL(req.url ?? '/', `http://${host}`);
+      } catch {
+        res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' });
+        res.end('Bad Request');
+        return;
+      }
       if (req.method === 'OPTIONS') {
         res.writeHead(405);
         res.end();
@@ -129,10 +138,22 @@ export async function startServer(kernel: Kernel, o: ServerOptions): Promise<Ser
         return;
       }
       await serveStatic(req, res, url.pathname);
-    })();
+    })().catch(() => {
+      // 兜底：任何未预料的异常都要应答，不能留下未处理 rejection 和悬挂的请求
+      try {
+        if (!res.headersSent) {
+          res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
+          res.end('Internal Server Error');
+        } else {
+          res.destroy();
+        }
+      } catch {
+        res.destroy();
+      }
+    });
   });
 
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_WS_FRAME_BYTES });
   const authenticatedClients = new Set<WebSocket>();
   const unsubscribeRemote = o.remote?.on(() => {
     for (const client of authenticatedClients) {
@@ -199,6 +220,9 @@ export async function startServer(kernel: Kernel, o: ServerOptions): Promise<Ser
         kernel.respondApproval(msg['id'], msg['approve'], msg['always'] === true);
       }
     });
+
+    // 超过帧上限等协议错误会触发 error（ws 随后自行关闭连接）；不处理会变成未捕获异常
+    ws.on('error', () => {});
 
     ws.on('close', () => {
       clearTimeout(timer);

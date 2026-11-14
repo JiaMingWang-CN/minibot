@@ -107,8 +107,10 @@ export class RemoteService {
   }
 
   async updateConfig(patch: ConfigPatch): Promise<RemoteStatus> {
+    const oldToken = this.store.relayToken();
     await this.store.updateConfig(patch);
     const token = this.store.relayToken();
+    if (oldToken !== null && oldToken !== token) this.kernel.diag.secrets.remove(oldToken);
     if (token !== null) this.kernel.diag.secrets.add(token);
     await this.reconcile(true);
     this.emit();

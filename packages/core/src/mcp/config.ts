@@ -153,6 +153,27 @@ export function parseMcpJson(text: string): { servers: McpServerDraft[]; ignored
   return { servers, ignored: [...ignored] };
 }
 
+/** 校验草稿的结构：名称、transport 类型、stdio 命令、http 地址（只允许 http/https） */
+export function assertValidDraft(draft: McpServerDraft): void {
+  if (typeof draft?.name !== 'string' || draft.name.trim().length === 0) throw new Error('MCP server 名称不能为空');
+  const transport = draft.transport as { type?: unknown; command?: unknown; url?: unknown } | undefined;
+  if (transport?.type === 'stdio') {
+    if (typeof transport.command !== 'string' || transport.command.trim().length === 0) throw new Error('stdio 的启动命令不能为空');
+  } else if (transport?.type === 'http') {
+    let parsed: URL | null = null;
+    try {
+      parsed = new URL(String(transport.url));
+    } catch {
+      parsed = null;
+    }
+    if (parsed === null || (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')) {
+      throw new Error('http 地址必须是合法的 http:// 或 https:// 地址');
+    }
+  } else {
+    throw new Error('MCP server 的传输方式必须是 stdio 或 http');
+  }
+}
+
 /** 把草稿变成可保存的配置，并把 secret 值单独返回（只进密钥库） */
 export function materializeServer(id: string, draft: McpServerDraft): { config: McpServerConfig; secrets: SecretEntry[] } {
   const secrets: SecretEntry[] = [];
@@ -208,6 +229,7 @@ export async function loadMcpServers(p: DataPaths): Promise<McpServerConfig[]> {
   return Array.isArray(file.mcpServers) ? file.mcpServers : [];
 }
 
+/** 调用方要自己持有 extensions.json 的锁（读改写在同一把锁里） */
 export async function saveMcpServers(p: DataPaths, servers: McpServerConfig[]): Promise<void> {
   const file = await loadExtensions(p);
   file.mcpServers = servers;

@@ -39,14 +39,18 @@ export class SecretStore {
   }
 
   async load(): Promise<void> {
-    this.loaded = true;
     let buf: Buffer;
     try {
       buf = await fs.readFile(this.file);
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        this.loaded = true;
+        return;
+      }
+      // 读失败不算加载完成：否则之后的 set() 会把没读到的原文件直接覆盖
       throw err;
     }
+    this.loaded = true;
     let parsed: unknown;
     try {
       parsed = JSON.parse(this.crypto.decrypt(buf));
@@ -55,12 +59,38 @@ export class SecretStore {
       this.unreadable = true;
       return;
     }
-    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return;
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      this.unreadable = true;
+      return;
+    }
     for (const [providerId, value] of Object.entries(parsed)) {
       if (typeof value !== 'string') continue;
       this.data.set(providerId, value);
-      this.secrets.add(value);
+      this.register(providerId, value);
     }
+  }
+
+  /** 登记脱敏：整段值；mcp:*:oauth 的值是 JSON，其中的 token / secret 字符串字段还要单独登记 */
+  private register(key: string, value: string): void {
+    this.secrets.add(value);
+    if (!/^mcp:.+:oauth$/.test(key)) return;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return;
+    }
+    const walk = (node: unknown): void => {
+      if (node === null || typeof node !== 'object') return;
+      for (const [name, v] of Object.entries(node)) {
+        if (typeof v === 'string') {
+          if (/token|secret/i.test(name) && name !== 'token_type') this.secrets.add(v);
+        } else {
+          walk(v);
+        }
+      }
+    };
+    walk(parsed);
   }
 
   /** secrets.bin 存在但无法解密 */
@@ -85,7 +115,7 @@ export class SecretStore {
     await this.ensureLoaded();
     this.data.set(providerId, key);
     await this.flush();
-    this.secrets.add(key);
+    this.register(providerId, key);
   }
 
   async delete(providerId: string): Promise<void> {
@@ -128,6 +158,6 @@ export class SecretStore {
       this.unreadable = false;
     }
     const plain = JSON.stringify(Object.fromEntries(this.data));
-    await atomicWriteFile(this.file, this.crypto.encrypt(plain));
+    await atomicWriteFile(this.file, this.crypto.encrypt(plain), undefined, 0o600);
   }
 }

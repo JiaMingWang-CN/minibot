@@ -1,5 +1,6 @@
 import type { ApiFormat } from '../config/types.ts';
 import { newToolUseId } from './ids.ts';
+import { INVALID_ARGS_KEY } from './adapter.ts';
 import type { AssistantResult, Block, Delta } from './types.ts';
 
 type ReasoningOpaque = { format: ApiFormat; model: string; data: unknown };
@@ -128,7 +129,8 @@ export class ResultAccumulator {
     if (u.cachedInputTokens !== undefined) this.usageValue.cachedInputTokens = u.cachedInputTokens;
   }
 
-  snapshot(): Block[] {
+  /** keepInvalid：参数解析不出对象的工具调用保留（正常结束时）；流中断时的 partial 里仍丢弃，保证“没产出就重试” */
+  snapshot(keepInvalid = false): Block[] {
     const blocks: Block[] = [];
     for (const part of this.parts) {
       if (part.kind === 'text') {
@@ -141,8 +143,13 @@ export class ResultAccumulator {
         }
       } else {
         // 无参数的工具调用没有任何参数增量，按空对象处理而不是丢掉
-        const input = parseToolArgs(part.args);
-        if (input !== undefined) blocks.push({ type: 'tool_use', id: part.id, name: part.name, input });
+        // 参数解析不出对象时保留该调用，把原文放进标记键，执行层回错误结果让模型重试
+        const parsed = parseToolArgs(part.args);
+        if (parsed !== undefined) blocks.push({ type: 'tool_use', id: part.id, name: part.name, input: parsed });
+        else if (keepInvalid) {
+          const input = { [INVALID_ARGS_KEY]: part.args.slice(0, 500) };
+          blocks.push({ type: 'tool_use', id: part.id, name: part.name, input });
+        }
       }
     }
     return structuredClone(blocks);
@@ -150,7 +157,7 @@ export class ResultAccumulator {
 
   result(): AssistantResult {
     return {
-      blocks: this.snapshot(),
+      blocks: this.snapshot(true),
       stopReason: this.stopReason,
       usage: { ...this.usageValue },
     };

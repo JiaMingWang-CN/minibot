@@ -78,7 +78,7 @@ export async function readMarketEntries(marketDir: string): Promise<MarketReadRe
   return { entries, problems };
 }
 
-function cacheDirFor(cacheRoot: string, url: string): string {
+export function cacheDirFor(cacheRoot: string, url: string): string {
   const hash = createHash('sha256').update(url).digest('hex').slice(0, 16);
   return path.join(cacheRoot, hash);
 }

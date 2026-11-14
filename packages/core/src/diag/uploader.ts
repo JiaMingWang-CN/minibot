@@ -69,6 +69,8 @@ export interface DiagnosticUploaderOptions {
   queueMax?: number;
   logsWindowMs?: number;
   logsMaxBytes?: number;
+  /** 单次上传请求的超时（毫秒）；默认 30 秒 */
+  postTimeoutMs?: number;
 }
 
 interface QueueRow {
@@ -101,6 +103,7 @@ export class DiagnosticUploader {
   private readonly queueMax: number;
   private readonly logsWindowMs: number;
   private readonly logsMaxBytes: number;
+  private readonly postTimeoutMs: number;
   private readonly insert: StatementSync;
   private readonly count: StatementSync;
   private readonly takeRows: StatementSync;
@@ -128,6 +131,7 @@ export class DiagnosticUploader {
     this.appVersion = o.appVersion;
     this.os = o.os;
     this.fetchImpl = o.fetchImpl ?? fetch;
+    this.postTimeoutMs = o.postTimeoutMs ?? 30_000;
     this.now = o.now ?? Date.now;
     this.autoStart = o.autoStart ?? true;
     this.tickMs = o.tickMs ?? TICK_MS;
@@ -334,6 +338,7 @@ export class DiagnosticUploader {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'content-encoding': 'gzip' },
       body: new Uint8Array(body),
+      signal: AbortSignal.timeout(this.postTimeoutMs),
     });
   }
 }

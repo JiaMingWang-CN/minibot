@@ -9,10 +9,11 @@ import type { DataPaths } from '../paths.ts';
 import type { SecretStore } from '../secrets/store.ts';
 import type { McpManager, McpServerState } from '../mcp/manager.ts';
 import { shortNameFrom, type McpServerConfig, type McpServerDraft, type McpValue } from '../mcp/config.ts';
-import { loadExtensions, saveExtensions, type ExtensionsFile } from '../extensions/store.ts';
+import { loadExtensions, updateExtensions } from '../extensions/store.ts';
+import { renameWithRetry } from '../fs/atomic-write.ts';
 import { readPluginBundle, resolvePluginServers, type PluginBundle, type PluginManifest } from './manifest.ts';
-import { stageFolder, stageGit, stageZip, lsRemote, type InstallSource, type StageOptions } from './sources.ts';
-import { ensureMarketRepo, readMarketEntries, type MarketEntry } from './market.ts';
+import { assertGitUrl, resolveZipRoot, stageFolder, stageGit, stageZip, lsRemote, type InstallSource, type StageOptions } from './sources.ts';
+import { cacheDirFor, ensureMarketRepo, readMarketEntries, type MarketEntry } from './market.ts';
 import { buildPreview, moveDir, type InstallPreview } from './install.ts';
 import { diffStdioCommands, type UpdatePreview } from './update.ts';
 
@@ -299,7 +300,7 @@ export class PluginService {
     }
 
     if (plugin.builtin && (name === 'deepseek' || name === 'tavily')) {
-      await this.connectSearch(plugin, bundle, values, file);
+      await this.connectSearch(plugin, bundle, values);
       return;
     }
 
@@ -327,7 +328,7 @@ export class PluginService {
     }
     plugin.config = storedConfig;
     plugin.serverIds = this.serverIdsOf(plugin, bundle);
-    await saveExtensions(this.opts.paths, file);
+    await this.persistPlugin(name, { config: plugin.config, serverIds: plugin.serverIds });
 
     for (const draft of resolvePluginServers(bundle, this.valuesFor(plugin, bundle))) {
       await this.opts.mcp.connect(pluginServerId(name, draft.name)).catch(() => undefined);
@@ -339,7 +340,6 @@ export class PluginService {
     plugin: InstalledPlugin,
     bundle: PluginBundle,
     values: Record<string, string>,
-    file: ExtensionsFile,
   ): Promise<void> {
     const name = plugin.name;
     const config: Record<string, string> = { ...(plugin.config ?? {}) };
@@ -381,7 +381,7 @@ export class PluginService {
     }
     plugin.config = config;
     plugin.serverIds = this.serverIdsOf(plugin, bundle);
-    await saveExtensions(this.opts.paths, file);
+    await this.persistPlugin(name, { config: plugin.config, serverIds: plugin.serverIds });
     for (const id of plugin.serverIds) await this.opts.mcp.connect(id).catch(() => undefined);
   }
 
@@ -390,7 +390,7 @@ export class PluginService {
     const plugin = file.plugins.find((p) => p.name === name);
     if (plugin === undefined) throw new Error(`插件不存在：${name}`);
     plugin.enabled = enabled;
-    await saveExtensions(this.opts.paths, file);
+    await this.persistPlugin(name, { enabled });
     const { bundle } = await this.tryBundle(plugin);
     const serverIds = this.serverIdsOf(plugin, bundle);
     if (!enabled) {
@@ -410,7 +410,7 @@ export class PluginService {
     if (plugin.builtin) throw new Error('预装插件不能删除');
     const { bundle } = await this.tryBundle(plugin);
     for (const id of this.serverIdsOf(plugin, bundle)) await this.opts.mcp.disconnect(id).catch(() => undefined);
-    await fs.rm(path.join(this.opts.paths.pluginsDir, name), { recursive: true, force: true });
+    await fs.rm(path.join(this.opts.paths.pluginsDir, name), { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     for (const field of bundle.manifest.config) {
       if (field.secret) await this.opts.secretStore.delete(pluginConfigSecretKey(name, field.key));
     }
@@ -421,17 +421,26 @@ export class PluginService {
       }
     }
     await this.opts.removeFromAllBots('plugins', name);
-    file.plugins = file.plugins.filter((p) => p.name !== name);
-    await saveExtensions(this.opts.paths, file);
+    await updateExtensions(this.opts.paths, (f) => {
+      f.plugins = f.plugins.filter((p) => p.name !== name);
+    });
     await this.opts.mcp.sync().catch(() => undefined);
+  }
+
+  /** 只把改动的字段写回最新的 extensions.json（锁内重读，不覆盖并发的其他修改） */
+  private async persistPlugin(name: string, patch: Partial<InstalledPlugin>): Promise<void> {
+    await updateExtensions(this.opts.paths, (f) => {
+      const target = f.plugins.find((p) => p.name === name);
+      if (target !== undefined) Object.assign(target, patch);
+    });
   }
 
   /** 登记一个已装插件（安装流水线 / 测试用） */
   async addInstalled(plugin: InstalledPlugin): Promise<void> {
-    const file = await loadExtensions(this.opts.paths);
-    if (file.plugins.some((p) => p.name === plugin.name)) throw new Error(`已安装同名插件：${plugin.name}`);
-    file.plugins = [...file.plugins, plugin];
-    await saveExtensions(this.opts.paths, file);
+    await updateExtensions(this.opts.paths, (file) => {
+      if (file.plugins.some((p) => p.name === plugin.name)) throw new Error(`已安装同名插件：${plugin.name}`);
+      file.plugins = [...file.plugins, plugin];
+    });
   }
 
   // —— 安装流水线与市场（Task 3）——
@@ -469,10 +478,11 @@ export class PluginService {
       let pluginRoot = tempBase;
       let source: PluginSource;
       if (src.kind === 'folder') {
-        await stageFolder(src.path, tempBase);
+        await stageFolder(src.path, tempBase, this.stageOptions());
         source = { kind: 'local' };
       } else if (src.kind === 'zip') {
         await stageZip(src.path, tempBase, this.stageOptions());
+        pluginRoot = await resolveZipRoot(tempBase);
         source = { kind: 'local' };
       } else if (src.kind === 'git') {
         const commit = await stageGit(src.url, src.ref, tempBase, this.stageOptions());
@@ -554,18 +564,17 @@ export class PluginService {
   }
 
   async addMarket(url: string): Promise<void> {
-    if (!(this.opts.gitUrlOk?.(url) ?? url.startsWith('https://'))) throw new Error('只支持 https:// 开头的 Git 地址');
-    const file = await loadExtensions(this.opts.paths);
-    if (!file.markets.includes(url)) {
-      file.markets = [...file.markets, url];
-      await saveExtensions(this.opts.paths, file);
-    }
+    assertGitUrl(url, this.opts.gitUrlOk);
+    await updateExtensions(this.opts.paths, (file) => {
+      if (!file.markets.includes(url)) file.markets = [...file.markets, url];
+    });
   }
 
   async removeMarket(url: string): Promise<void> {
-    const file = await loadExtensions(this.opts.paths);
-    file.markets = file.markets.filter((m) => m !== url);
-    await saveExtensions(this.opts.paths, file);
+    await updateExtensions(this.opts.paths, (file) => {
+      file.markets = file.markets.filter((m) => m !== url);
+    });
+    await fs.rm(cacheDirFor(path.join(this.opts.paths.cacheDir, 'markets'), url), { recursive: true, force: true }).catch(() => undefined);
   }
 
   // —— 检查更新与更新（Task 4）——
@@ -668,7 +677,7 @@ export class PluginService {
     try {
       for (const id of oldEntry.serverIds) await this.opts.mcp.disconnect(id).catch(() => undefined);
       await fs.mkdir(this.opts.paths.pluginsDir, { recursive: true });
-      await fs.rename(target, backup);
+      await renameWithRetry(target, backup);
       movedOld = true;
       await (this.opts.moveDirImpl ?? moveDir)(pending.newRoot, target);
       movedNew = true;
@@ -676,7 +685,11 @@ export class PluginService {
       plugin.version = newBundle.manifest.version;
       plugin.source = pending.source;
       plugin.serverIds = newBundle.mcp.map((draft) => pluginServerId(pending.name, draft.name));
-      await saveExtensions(this.opts.paths, file);
+      await this.persistPlugin(pending.name, {
+        version: plugin.version,
+        source: plugin.source,
+        serverIds: plugin.serverIds,
+      });
 
       const values = this.valuesFor(plugin, newBundle);
       if (this.requiredComplete(newBundle, values)) {
@@ -687,13 +700,11 @@ export class PluginService {
       await fs.rm(backup, { recursive: true, force: true }).catch(() => undefined);
     } catch (err) {
       if (movedNew) await fs.rm(target, { recursive: true, force: true }).catch(() => undefined);
-      if (movedOld) await fs.rename(backup, target).catch(() => undefined);
-      const restored = await loadExtensions(this.opts.paths);
-      const index = restored.plugins.findIndex((p) => p.name === pending.name);
-      if (index >= 0) {
-        restored.plugins[index] = oldEntry;
-        await saveExtensions(this.opts.paths, restored);
-      }
+      if (movedOld) await renameWithRetry(backup, target).catch(() => undefined);
+      await updateExtensions(this.opts.paths, (restored) => {
+        const index = restored.plugins.findIndex((p) => p.name === pending.name);
+        if (index >= 0) restored.plugins[index] = oldEntry;
+      });
       for (const id of oldEntry.serverIds) await this.opts.mcp.connect(id).catch(() => undefined);
       throw err;
     } finally {
@@ -705,6 +716,7 @@ export class PluginService {
 
   /** 内核启动时扫描预装插件目录；已登记的保留用户配置与启用状态，版本号按资源目录更新 */
   async registerBuiltin(): Promise<void> {
+    await this.cleanupLeftovers();
     const dir = this.opts.builtinPluginsDir;
     if (dir === undefined) return;
     let entries;
@@ -714,39 +726,70 @@ export class PluginService {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
       throw err;
     }
-    const file = await loadExtensions(this.opts.paths);
-    let changed = false;
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const root = path.join(dir, entry.name);
-      try {
-        await fs.access(path.join(root, MANIFEST_FILE));
-      } catch {
-        continue;
-      }
-      let bundle: PluginBundle;
-      try {
-        bundle = await readPluginBundle(root);
-      } catch {
-        continue;
-      }
-      const name = bundle.manifest.name;
-      const serverIds = bundle.mcp.map((draft) => pluginServerId(name, draft.name));
-      const existing = file.plugins.find((p) => p.name === name);
-      if (existing === undefined) {
-        file.plugins.push({ name, version: bundle.manifest.version, builtin: true, source: { kind: 'builtin' }, enabled: true, serverIds });
+    const stale: string[] = [];
+    await updateExtensions(this.opts.paths, async (file) => {
+      let changed = false;
+      const dirNames = new Set(entries.filter((e) => e.isDirectory()).map((e) => e.name));
+      // 后续版本移除的预装插件：登记还在但预装目录已没有，清掉登记（bot 里的启用项在锁外清）
+      const kept = file.plugins.filter((p) => !(p.builtin && !dirNames.has(p.name)));
+      if (kept.length !== file.plugins.length) {
+        for (const p of file.plugins) if (!kept.includes(p)) stale.push(p.name);
+        file.plugins = kept;
         changed = true;
-        continue;
       }
-      const versionChanged = existing.version !== bundle.manifest.version;
-      const idsChanged = existing.serverIds.join('\n') !== serverIds.join('\n');
-      existing.builtin = true;
-      existing.source = { kind: 'builtin' };
-      existing.version = bundle.manifest.version;
-      existing.serverIds = serverIds;
-      if (versionChanged || idsChanged) changed = true;
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const root = path.join(dir, entry.name);
+        try {
+          await fs.access(path.join(root, MANIFEST_FILE));
+        } catch {
+          continue;
+        }
+        let bundle: PluginBundle;
+        try {
+          bundle = await readPluginBundle(root);
+        } catch {
+          continue;
+        }
+        const name = bundle.manifest.name;
+        const serverIds = bundle.mcp.map((draft) => pluginServerId(name, draft.name));
+        const existing = file.plugins.find((p) => p.name === name);
+        if (existing === undefined) {
+          file.plugins.push({ name, version: bundle.manifest.version, builtin: true, source: { kind: 'builtin' }, enabled: true, serverIds });
+          changed = true;
+          continue;
+        }
+        // 同名的第三方插件（builtin 不为 true）不被预装插件接管
+        if (!existing.builtin) continue;
+        const versionChanged = existing.version !== bundle.manifest.version;
+        const idsChanged = existing.serverIds.join('\n') !== serverIds.join('\n');
+        existing.builtin = true;
+        existing.source = { kind: 'builtin' };
+        existing.version = bundle.manifest.version;
+        existing.serverIds = serverIds;
+        if (versionChanged || idsChanged) changed = true;
+      }
+      return changed;
+    });
+    for (const name of stale) await this.opts.removeFromAllBots('plugins', name);
+  }
+
+  /** 启动时清理崩溃残留：tmp 下的 plugin-* / plugin-update-*，plugins 下的 <name>.bak-<数字>（原目录已不在则恢复） */
+  private async cleanupLeftovers(): Promise<void> {
+    if (this.pending.size > 0 || this.pendingUpdates.size > 0) return;
+    const tmp = this.opts.paths.tmpDir;
+    for (const name of await fs.readdir(tmp).catch(() => [] as string[])) {
+      if (name.startsWith('plugin-')) await fs.rm(path.join(tmp, name), { recursive: true, force: true }).catch(() => undefined);
     }
-    if (changed) await saveExtensions(this.opts.paths, file);
+    const dir = this.opts.paths.pluginsDir;
+    for (const name of await fs.readdir(dir).catch(() => [] as string[])) {
+      const match = /^(.+)\.bak-\d+$/.exec(name);
+      if (match === null) continue;
+      const backup = path.join(dir, name);
+      const original = path.join(dir, match[1]!);
+      if (await fs.stat(original).then(() => false, () => true)) await fs.rename(backup, original).catch(() => undefined);
+      else await fs.rm(backup, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
 
   /** 至少被一个 bot 启用、且未被该 bot 单独关掉的插件 server id */

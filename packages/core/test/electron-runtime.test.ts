@@ -11,8 +11,9 @@ const ELECTRON_SUITES = ['noise.test.ts', 'channel.test.ts', 'remote-interop.tes
 test('Noise 与加密信道在 Electron 运行时里可用', () => {
   const electron = createRequire(import.meta.url)('electron') as string;
   const files = ELECTRON_SUITES.map((name) => fileURLToPath(new URL(name, import.meta.url)));
+  // 同时去掉 NODE_OPTIONS（容器里的 --use-openssl-ca 等 Electron 不认）。
   // 去掉 node --test 给子进程设的 NODE_TEST_CONTEXT：带着它，Electron 会把结果当子测试上报、退出码恒为 0
-  const { NODE_TEST_CONTEXT: _, ...env } = process.env;
+  const { NODE_TEST_CONTEXT: _, NODE_OPTIONS: __, ...env } = process.env;
   const result = spawnSync(electron, ['--test', ...files], {
     env: { ...env, ELECTRON_RUN_AS_NODE: '1' },
     encoding: 'utf8',

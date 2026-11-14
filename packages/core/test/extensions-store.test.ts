@@ -48,7 +48,58 @@ test('坏文件回退默认值', async () => {
   const f = await loadExtensions(p);
   assert.deepEqual(f.web, { fetchEnabled: true, searchEngine: 'none' });
   // 原文件备份下来，之后保存覆盖也不会丢内容
-  assert.equal(await fs.readFile(`${p.extensionsJson}.bad`, 'utf8'), '{ not json');
+  const backups = (await fs.readdir(p.root)).filter((n) => n.startsWith('extensions.json.bad-'));
+  assert.equal(backups.length, 1);
+  assert.equal(await fs.readFile(path.join(p.root, backups[0]!), 'utf8'), '{ not json');
+});
+
+test('坏文件备份名带时间戳，连续两次损坏不互相覆盖', async () => {
+  const p = await tmpPaths();
+  await fs.writeFile(p.extensionsJson, '{ first');
+  await loadExtensions(p);
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  await fs.writeFile(p.extensionsJson, '{ second');
+  await loadExtensions(p);
+  const contents = await Promise.all(
+    (await fs.readdir(p.root)).filter((n) => n.startsWith('extensions.json.bad-')).map((n) => fs.readFile(path.join(p.root, n), 'utf8')),
+  );
+  assert.deepEqual(contents.sort(), ['{ first', '{ second']);
+});
+
+test('mcpServers 读盘逐项校验：结构不合规的条目被跳过，合规的保留', async () => {
+  const p = await tmpPaths();
+  const good = {
+    id: 'a',
+    name: 'good',
+    shortName: 'g',
+    transport: { type: 'stdio', command: 'node', args: ['x.js'], cwd: null, env: { K: { secret: false, value: 'v' }, S: { secret: true } } },
+    timeoutMs: 1000,
+    origin: { kind: 'user' },
+  };
+  const goodHttp = {
+    id: 'b',
+    name: 'web',
+    shortName: 'w',
+    transport: { type: 'http', url: 'https://x.test/mcp', headers: {}, auth: 'oauth' },
+    timeoutMs: 1000,
+    origin: { kind: 'plugin', pluginId: 'p' },
+  };
+  const bad = [
+    null,
+    'str',
+    { ...good, id: 1 },
+    { ...good, transport: undefined },
+    { ...good, transport: { type: 'ftp' } },
+    { ...good, transport: { ...good.transport, args: 'x' } },
+    { ...good, transport: { ...good.transport, env: { K: 'plain' } } },
+    { ...goodHttp, transport: { type: 'http', url: 5, headers: {}, auth: 'none' } },
+    { ...goodHttp, transport: { ...goodHttp.transport, auth: 'basic' } },
+    { ...good, timeoutMs: 'x' },
+    { ...good, origin: { kind: 'plugin' } },
+  ];
+  await fs.writeFile(p.extensionsJson, JSON.stringify({ schemaVersion: 1, mcpServers: [bad[0], good, ...bad.slice(1), goodHttp] }));
+  const f = await loadExtensions(p);
+  assert.deepEqual(f.mcpServers.map((s) => s.id), ['a', 'b']);
 });
 
 test('并发修改联网设置不丢更新', async () => {

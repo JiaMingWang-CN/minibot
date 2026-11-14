@@ -54,6 +54,7 @@ export function McpServerDialog({
   const [timeout, setTimeoutText] = useState('60000');
   const [paste, setPaste] = useState('');
   const [ignored, setIgnored] = useState<string[]>([]);
+  const [extraServers, setExtraServers] = useState(0);
   const [confirming, setConfirming] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -96,6 +97,7 @@ export function McpServerDialog({
     try {
       const result = await api.parseMcp(paste);
       setIgnored(result.ignored);
+      setExtraServers(Math.max(0, result.servers.length - 1));
       const draft = result.servers[0];
       if (draft === undefined) {
         setError(t('extensions.mcp.empty'));
@@ -208,6 +210,9 @@ export function McpServerDialog({
               <p className="rounded-lg bg-warning/10 px-3 py-2 text-[12px] text-warning">
                 {t('extensions.mcp.ignored', { fields: ignored.join(', ') })}
               </p>
+            )}
+            {extraServers > 0 && (
+              <p className="rounded-lg bg-warning/10 px-3 py-2 text-[12px] text-warning">{t('extensions.mcp.extraServers', { count: extraServers })}</p>
             )}
             <Field label={t('extensions.mcp.name')}>
               <input value={name} onChange={(e) => setName(e.target.value)} className={FIELD} />

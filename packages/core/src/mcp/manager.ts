@@ -248,13 +248,12 @@ export class McpManager {
     if (manual) entry.restartCount = 0;
     this.setStatus(entry, 'connecting', null);
 
-    const transport = this.createTransport(entry.config, generation, oauthProvider);
-    if (transport === null) {
-      this.setStatus(entry, 'failed', `工作目录不存在：${entry.config.transport.type === 'stdio' ? entry.config.transport.cwd ?? '' : ''}`);
-      return;
-    }
-
     try {
+      const transport = this.createTransport(entry.config, generation, oauthProvider);
+      if (transport === null) {
+        this.setStatus(entry, 'failed', `工作目录不存在：${entry.config.transport.type === 'stdio' ? entry.config.transport.cwd ?? '' : ''}`);
+        return;
+      }
       const client = new Client(CLIENT_INFO, {
         versionNegotiation: { mode: 'auto' },
         listChanged: {
@@ -309,7 +308,8 @@ export class McpManager {
         args: [...config.transport.args],
         cwd,
         env: buildStdioEnv(config, this.opts.secretStore, this.opts.platform ?? process.platform, this.opts.env ?? process.env),
-        stderr: 'pipe',
+        // 没人读 stderr，用 pipe 会在缓冲写满后把 server 阻塞
+        stderr: 'ignore',
       });
     }
     const headers: Record<string, string> = {};

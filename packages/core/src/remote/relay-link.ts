@@ -19,12 +19,15 @@ export interface RelayLinkOptions {
   initialBackoffMs?: number;
   /** 测试用，默认 25000：隔这么久发一次 ping，下一轮还没收到 pong 就断开重连 */
   pingIntervalMs?: number;
+  /** 测试用，默认 15000：从发起连接到收到 welcome 的上限，超时就断开按退避重连 */
+  connectTimeoutMs?: number;
   /** 连接、断线与握手失败写进本地日志；绝不记录地址与口令 */
   diag?: DiagLog;
 }
 
 const MAX_BACKOFF_MS = 60_000;
 const PING_INTERVAL_MS = 25_000;
+const CONNECT_TIMEOUT_MS = 15_000;
 const SESSION_ID_BYTES = 16;
 const AUTH_LABEL = 'minibot-relay-auth/1';
 
@@ -145,6 +148,14 @@ export class RelayLink {
     let errorCode: string | undefined;
     // 电脑睡眠、换网络后连接可能半开：本地一直是 OPEN 却再也收不到东西，靠心跳发现并重连
     let alive = true;
+    // TCP 通了却不回升级、或升级后一直没有 welcome：心跳要 open 之后才启动，这里单独设上限
+    let timedOut = false;
+    const connectTimer = setTimeout(() => {
+      timedOut = true;
+      failure = '连接中继超时';
+      ws.terminate();
+    }, this.o.connectTimeoutMs ?? CONNECT_TIMEOUT_MS);
+    connectTimer.unref();
     ws.on('pong', () => {
       alive = true;
     });
@@ -197,6 +208,7 @@ export class RelayLink {
         }
         ws.send(JSON.stringify({ type: 'proof', proof }));
       } else if (message['type'] === 'welcome') {
+        clearTimeout(connectTimer);
         if (!this.replaced) this.backoff = this.o.initialBackoffMs ?? 1000;
         this.replaced = false;
         this.reported = false;
@@ -227,10 +239,11 @@ export class RelayLink {
 
     ws.on('error', (err: Error) => {
       errorCode = (err as NodeJS.ErrnoException).code;
-      failure = describeError(err);
+      if (!timedOut) failure = describeError(err);
     });
 
     ws.on('close', (code: number) => {
+      clearTimeout(connectTimer);
       if (this.ws !== ws) return;
       this.stopHeartbeat();
       this.ws = null;

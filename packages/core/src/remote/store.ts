@@ -95,7 +95,9 @@ export class RemoteStore {
   private async readJson(file: string): Promise<unknown> {
     try {
       return JSON.parse(await fs.readFile(file, 'utf8'));
-    } catch {
+    } catch (err) {
+      // 文件不存在是正常的；其它错误（损坏等）先留一份，否则下次写盘会把配对设备等整个覆盖掉
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') await fs.copyFile(file, `${file}.corrupt`).catch(() => {});
       return null;
     }
   }
@@ -182,7 +184,7 @@ export class RemoteStore {
 
   private writeKey(): Promise<void> {
     const key = this.keyFile!;
-    return this.enqueue(() => atomicWriteFile(this.paths.remoteKey, this.crypto.encrypt(JSON.stringify(key))));
+    return this.enqueue(() => atomicWriteFile(this.paths.remoteKey, this.crypto.encrypt(JSON.stringify(key)), undefined, 0o600));
   }
 
   private writeConfig(): Promise<void> {
@@ -245,11 +247,27 @@ export class RemoteStore {
     if (patch.pcName !== undefined) next.pcName = cleanName(patch.pcName);
     if (patch.relayToken !== undefined) this.requireKey();
 
+    // 两个文件不是一次写入：任何一步失败都把内存（和已写的配置）退回原状，不留半改状态
+    const prevCfg = this.cfg;
     this.cfg = next;
-    await this.writeConfig();
+    try {
+      await this.writeConfig();
+    } catch (err) {
+      this.cfg = prevCfg;
+      throw err;
+    }
     if (patch.relayToken !== undefined) {
-      this.keyFile!.relayToken = patch.relayToken === null || patch.relayToken.length === 0 ? null : patch.relayToken;
-      await this.writeKey();
+      const key = this.keyFile!;
+      const prevToken = key.relayToken;
+      key.relayToken = patch.relayToken === null || patch.relayToken.length === 0 ? null : patch.relayToken;
+      try {
+        await this.writeKey();
+      } catch (err) {
+        key.relayToken = prevToken;
+        this.cfg = prevCfg;
+        await this.writeConfig().catch(() => {});
+        throw err;
+      }
     }
   }
 

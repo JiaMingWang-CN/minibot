@@ -128,7 +128,7 @@ test('工具结果出口统一脱敏', async () => {
 test('异常不外抛，转成 status error，错误信息也经过脱敏', async () => {
   const { env, close } = await setup();
   env.bot.approvalMode = 'ask';
-  const result = await executeTool(call('read_file', { path: '.' }), env);
+  const result = await executeTool(call('read_file', { path: 'a\0b' }), env);
   assert.equal(result.status, 'error');
   assert.ok(result.content.includes('工具执行失败'));
   close();

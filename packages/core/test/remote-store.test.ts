@@ -114,3 +114,32 @@ test('store 首次保存密钥失败：不抛出，手机功能不可用', async
   assert.equal(s.available(), false);
   assert.throws(() => s.identity());
 });
+
+test('store devices.json 损坏：不静默覆盖，原文件留一份 .corrupt', async () => {
+  const { paths } = await tmp();
+  const first = await RemoteStore.open({ paths, crypto: fakeCrypto() });
+  await first.addDevice('手机', generateKeyPair().publicKey);
+  await fs.writeFile(paths.devicesJson, '{"这不是合法 JSON');
+  const s = await RemoteStore.open({ paths, crypto: fakeCrypto() });
+  assert.deepEqual(s.devices(), []);
+  await s.addDevice('新手机', generateKeyPair().publicKey);
+  assert.equal(await fs.readFile(`${paths.devicesJson}.corrupt`, 'utf8'), '{"这不是合法 JSON');
+});
+
+test('store updateConfig：写口令失败时内存与磁盘都回到原状', async () => {
+  const { paths } = await tmp();
+  const crypto = fakeCrypto();
+  const s = await RemoteStore.open({ paths, crypto });
+  await s.updateConfig({ pcName: '甲', relayToken: 'token-before-1234' });
+  const failing: KeyCrypto = {
+    ...crypto,
+    encrypt: () => {
+      throw new Error('加密失败');
+    },
+  };
+  (s as unknown as { crypto: KeyCrypto }).crypto = failing;
+  await assert.rejects(s.updateConfig({ pcName: '乙', relayToken: 'token-after-1234' }), /加密失败/);
+  assert.equal(s.config().pcName, '甲');
+  assert.equal(s.relayToken(), 'token-before-1234');
+  assert.equal(JSON.parse(await fs.readFile(paths.remoteJson, 'utf8')).pcName, '甲');
+});

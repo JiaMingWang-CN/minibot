@@ -23,6 +23,7 @@ export interface StageOptions {
 
 export const MAX_ZIP_ENTRIES = 5000;
 export const MAX_ZIP_BYTES = 100 * 1024 * 1024;
+const MANIFEST_FILE = 'minibot-plugin.json';
 export const GIT_TIMEOUT_MS = 120_000;
 
 export function isHttpsGit(url: string): boolean {
@@ -31,6 +32,16 @@ export function isHttpsGit(url: string): boolean {
 
 export function assertGitUrl(url: string, ok: (url: string) => boolean = isHttpsGit): void {
   if (!ok(url)) throw new Error('只支持 https:// 开头的 Git 地址');
+  // 带凭据的地址会明文进 extensions.json 与报错文本；错误里不回显地址
+  let parsed: URL | null = null;
+  try {
+    parsed = new URL(url);
+  } catch {
+    // 本地路径等非 URL 形式（测试注入的 ok 才会放行）
+  }
+  if (parsed !== null && (parsed.username.length > 0 || parsed.password.length > 0)) {
+    throw new Error('Git 地址不要在地址里带用户名或密码');
+  }
 }
 
 async function runGit(args: string[], cwd: string, opts: StageOptions): Promise<string> {
@@ -56,9 +67,46 @@ async function runGit(args: string[], cwd: string, opts: StageOptions): Promise<
   return text;
 }
 
-/** 深拷贝目录（不跟随符号链接） */
-export async function stageFolder(srcPath: string, dest: string): Promise<void> {
-  await fs.cp(srcPath, dest, { recursive: true, dereference: false });
+/** 统计目录条目数与总字节（不跟随、不计符号链接），超限立即报错 */
+async function assertDirWithinLimits(root: string, opts: StageOptions): Promise<void> {
+  const maxEntries = opts.maxZipEntries ?? MAX_ZIP_ENTRIES;
+  const maxBytes = opts.maxZipBytes ?? MAX_ZIP_BYTES;
+  let count = 0;
+  let total = 0;
+  const walk = async (dir: string): Promise<void> => {
+    for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+      if (entry.isSymbolicLink()) continue;
+      count += 1;
+      if (count > maxEntries) throw new Error('插件目录条目超过 5000 个');
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walk(full);
+      } else {
+        total += (await fs.lstat(full)).size;
+        if (total > maxBytes) throw new Error('插件目录超过 100 MB');
+      }
+    }
+  };
+  await walk(root);
+}
+
+/** 拷贝目录；跳过符号链接，并限制条目数与总大小（与 zip 相同） */
+export async function stageFolder(srcPath: string, dest: string, opts: StageOptions = {}): Promise<void> {
+  await assertDirWithinLimits(srcPath, opts);
+  await fs.cp(srcPath, dest, {
+    recursive: true,
+    dereference: false,
+    filter: async (src) => !(await fs.lstat(src)).isSymbolicLink(),
+  });
+}
+
+/** zip 顶层只套了一层目录（如 GitHub 下载）时，把该子目录当插件根 */
+export async function resolveZipRoot(dir: string): Promise<string> {
+  if (await fs.stat(path.join(dir, MANIFEST_FILE)).then(() => true, () => false)) return dir;
+  const subs = (await fs.readdir(dir, { withFileTypes: true })).filter((e) => e.name !== '__MACOSX');
+  if (subs.length !== 1 || !subs[0]!.isDirectory()) return dir;
+  const inner = path.join(dir, subs[0]!.name);
+  return (await fs.stat(path.join(inner, MANIFEST_FILE)).then(() => true, () => false)) ? inner : dir;
 }
 
 function zipEntrySafe(name: string, dest: string): boolean {
@@ -159,6 +207,12 @@ export async function stageGit(url: string, ref: string | undefined, dest: strin
   if (ref !== undefined && ref.length > 0) args.push('--branch', ref);
   args.push(url, dest);
   await runGit(args, path.dirname(dest), opts);
+  try {
+    await assertDirWithinLimits(dest, opts);
+  } catch (err) {
+    await fs.rm(dest, { recursive: true, force: true }).catch(() => undefined);
+    throw err;
+  }
   const head = await runGit(['rev-parse', 'HEAD'], dest, opts);
   return head.trim();
 }

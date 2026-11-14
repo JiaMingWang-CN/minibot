@@ -113,6 +113,17 @@ async function bootstrap(): Promise<void> {
   const builtinPluginsDir = app.isPackaged
     ? path.join(process.resourcesPath, 'builtin-plugins')
     : path.join(__dirname, '..', '..', '..', 'packages', 'builtin-plugins');
+  // 要先于 Kernel.open 声明：内核启动期间就可能打开授权页
+  // 只把 http(s) 链接交给系统浏览器；其他协议（file:、自定义协议）一律不打开
+  const openExternal = (target: string): void => {
+    try {
+      const { protocol } = new URL(target);
+      if (protocol === 'https:' || protocol === 'http:') void shell.openExternal(target);
+    } catch {
+      // 不是合法 URL，忽略
+    }
+  };
+
   kernel = await Kernel.open({
     dataRoot,
     crypto,
@@ -188,13 +199,15 @@ async function bootstrap(): Promise<void> {
 
   ipcMain.handle('minibot:pick-folder', async (event) => {
     assertTrusted(event);
-    const result = await dialog.showOpenDialog({ properties: ['openDirectory'] });
+    const options: import('electron').OpenDialogOptions = { properties: ['openDirectory'] };
+    const result = mainWindow !== undefined ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
     return result.canceled ? null : (result.filePaths[0] ?? null);
   });
 
   ipcMain.handle('minibot:pick-zip', async (event) => {
     assertTrusted(event);
-    const result = await dialog.showOpenDialog({ properties: ['openFile'], filters: [{ name: 'zip', extensions: ['zip'] }] });
+    const options: import('electron').OpenDialogOptions = { properties: ['openFile'], filters: [{ name: 'zip', extensions: ['zip'] }] };
+    const result = mainWindow !== undefined ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
     return result.canceled ? null : (result.filePaths[0] ?? null);
   });
 
@@ -224,15 +237,6 @@ async function bootstrap(): Promise<void> {
       nodeIntegration: false,
     },
   });
-  // 只把 http(s) 链接交给系统浏览器；其他协议（file:、自定义协议）一律不打开
-  const openExternal = (target: string): void => {
-    try {
-      const { protocol } = new URL(target);
-      if (protocol === 'https:' || protocol === 'http:') void shell.openExternal(target);
-    } catch {
-      // 不是合法 URL，忽略
-    }
-  };
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     openExternal(url);
     return { action: 'deny' };
@@ -323,7 +327,7 @@ app.on('before-quit', (event) => {
   if (quitting) return;
   quitting = true;
   event.preventDefault();
-  void (async () => {
+  const cleanup = async (): Promise<void> => {
     tray?.destroy();
     tray = undefined;
     try {
@@ -347,6 +351,8 @@ app.on('before-quit', (event) => {
     } catch {
       // 同上
     }
-    app.quit();
-  })();
+  };
+  // 清理卡住（内核或手机服务关不掉）也要能退出
+  const timeout = new Promise<void>((resolve) => setTimeout(resolve, 8000));
+  void Promise.race([cleanup(), timeout]).then(() => app.quit());
 });

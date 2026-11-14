@@ -11,6 +11,9 @@ import { WEB_UNTRUSTED_NOTICE } from './web-tools.ts';
 
 const DEFAULT_SCHEMA: Record<string, unknown> = { type: 'object', properties: {} };
 
+/** 按 URL 抓取内容的工具名（fetch / extract / crawl） */
+const FETCH_LIKE = /(^|[_-])(fetch|extract|crawl)([_-]|$)/i;
+
 const ENGINE_NAME: Record<'deepseek' | 'tavily', string> = { deepseek: 'DeepSeek', tavily: 'Tavily' };
 
 export function searchServerId(engine: 'deepseek' | 'tavily'): string {
@@ -39,7 +42,9 @@ export class SearchToolProvider implements ExternalToolProvider {
     const serverId = searchServerId(engine);
     const state = this.opts.manager.states().find((s) => s.id === serverId);
     if (state === undefined || state.status !== 'connected') return [];
-    return state.tools.map((info) => this.externalTool(engine, serverId, info));
+    // 关闭“抓取网页”后，搜索引擎里抓取类的工具（如 deepseek_fetch）也不提供
+    const tools = settings.fetchEnabled ? state.tools : state.tools.filter((info) => !FETCH_LIKE.test(info.name));
+    return tools.map((info) => this.externalTool(engine, serverId, info));
   }
 
   private externalTool(engine: 'deepseek' | 'tavily', serverId: string, info: McpToolInfo): ExternalTool {

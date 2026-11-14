@@ -115,7 +115,7 @@ export function PhonePage({ api, subscribe }: { api: Api; subscribe: Subscribe }
     update({ lanPort: next });
   };
   const onEnter = (save: () => void) => (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') save();
+    if (e.key === 'Enter' && !e.nativeEvent.isComposing) save();
   };
 
   const relayTone = status.relay === 'connected' ? 'ok' : status.relay === 'connecting' ? 'busy' : status.relay === 'error' ? 'error' : 'idle';

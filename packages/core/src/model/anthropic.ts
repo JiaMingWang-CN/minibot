@@ -109,10 +109,13 @@ function anthropicBody(req: ModelRequest): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model: req.model,
     max_tokens: req.maxTokens,
-    system: [{ type: 'text', text: req.system, cache_control: cacheControl }],
     messages,
     stream: true,
   };
+  // Anthropic 不接受空的 text 块：没有系统提示（如测试连接）时不发 system
+  if (req.system.length > 0) {
+    body['system'] = [{ type: 'text', text: req.system, cache_control: cacheControl }];
+  }
   if (req.tools.length > 0) {
     body['tools'] = req.tools.map((t) => ({
       name: t.name,

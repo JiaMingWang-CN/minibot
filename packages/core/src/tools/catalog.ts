@@ -2,6 +2,7 @@ import type { Bot } from '../config/types.ts';
 import type { DiagLog } from '../diag/log.ts';
 import type { ToolSpec } from '../model/adapter.ts';
 import type { SkillInfo } from '../skills/skill.ts';
+import { isDirectTool } from '../approval/policy.ts';
 import { LOAD_SKILL_SPEC } from '../skills/load-skill.ts';
 import { TOOL_SPECS } from './registry.ts';
 import type { ToolOutput } from './types.ts';
@@ -74,7 +75,7 @@ export class ToolCatalog {
       }
       for (const tool of tools) {
         const name = tool.spec.name;
-        if (BUILTIN_NAMES.has(name)) continue;
+        if (BUILTIN_NAMES.has(name) || isDirectTool(name)) continue;
         if (external.has(name)) {
           this.diag()?.write('warn', 'tool', 'tool.name_conflict', { tool: name });
           continue;

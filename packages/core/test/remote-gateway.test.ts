@@ -5,7 +5,7 @@ import { RemoteGateway } from '../src/remote/gateway.ts';
 import { RemoteStore } from '../src/remote/store.ts';
 import { parsePairingCode } from '../src/remote/pairing.ts';
 import { createHandshake, generateKeyPair } from '../src/remote/noise.ts';
-import { FRAME_PAIR } from '../src/remote/channel.ts';
+import { FRAME_KK, FRAME_PAIR } from '../src/remote/channel.ts';
 import { carrierPair, type MemoryCarrier } from './carrier-pair.ts';
 import { TestPhone } from './remote-phone.ts';
 import { fakeCrypto, kernelHarness, textModel, waitFor, waitIdle, type KernelHarness } from './kernel-harness.ts';
@@ -91,23 +91,13 @@ test('gateway 邀请过期', () => {
   );
 });
 
-test('gateway 5 次失败', () =>
+test('gateway 配对失败不作废邀请：任意次错误 psk 之后正确配对仍成功', () =>
   withSetup(async (s) => {
     const offer = s.gateway.startPairing({ lanAddresses: [] });
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 8; i++) {
       await assert.rejects(TestPhone.pair(s.connect().phoneSide, offer.code, 'x', { psk: Buffer.alloc(32, i + 1) }));
     }
-    assert.equal(s.gateway.pairing(), null);
-    await assert.rejects(TestPhone.pair(s.connect().phoneSide, offer.code));
-    assert.equal(s.store.devices().length, 0);
-  }));
-
-test('gateway 错误尝试不影响之前正确配对的前 4 次内', () =>
-  withSetup(async (s) => {
-    const offer = s.gateway.startPairing({ lanAddresses: [] });
-    for (let i = 0; i < 4; i++) {
-      await assert.rejects(TestPhone.pair(s.connect().phoneSide, offer.code, 'x', { psk: Buffer.alloc(32, i + 1) }));
-    }
+    assert.notEqual(s.gateway.pairing(), null);
     await TestPhone.pair(s.connect().phoneSide, offer.code);
     assert.equal(s.store.devices().length, 1);
   }));
@@ -259,4 +249,79 @@ test('gateway 配对完成瞬间手机断开：仍通知界面', () =>
     await waitFor(() => s.store.devices().length === 1);
     await waitFor(() => notified > 0);
     assert.equal(s.gateway.pairing(), null);
+  }));
+
+test('gateway KK 握手 msg1 被重放：不算在线、不更新 lastSeen，直到收到首个可解密的数据帧', () =>
+  withSetup(
+    async (s) => {
+      const first = await s.pair();
+      first.close();
+      const id = s.store.devices()[0]!.id;
+      await waitFor(() => !s.gateway.onlineDeviceIds().includes(id));
+      const seen = s.store.devices()[0]!.lastSeenAt;
+
+      // 抓一份手机真实发出的 KK msg1
+      const hs = createHandshake({ pattern: 'KK', initiator: true, s: first.keys, rs: first.pcPublicKey });
+      const msg1 = Buffer.concat([Buffer.from([FRAME_KK]), Buffer.from(id, 'hex'), hs.writeMessage(Buffer.alloc(0))]);
+
+      const { a, b } = carrierPair();
+      s.gateway.accept(a, 'lan');
+      let frames = 0;
+      let closed = false;
+      b.onFrame(() => (frames += 1));
+      b.onClose(() => (closed = true));
+      b.send(msg1);
+      await waitFor(() => frames >= 1);
+      // 重放者解不开会话，什么都不会发生
+      await new Promise((r) => setTimeout(r, 30));
+      assert.deepEqual(s.gateway.onlineDeviceIds(), []);
+      assert.equal(s.store.devices()[0]!.lastSeenAt, seen);
+      const before = frames;
+      s.h.kernel.sendMessage(s.h.threadId, '你好');
+      await waitIdle(s.h);
+      assert.equal(frames, before);
+      // 没有首帧：超时后被关闭
+      await waitFor(() => closed);
+    },
+    { handshakeTimeoutMs: 150 },
+  ));
+
+test('gateway KK 握手后手机发出首帧才算会话建立', () =>
+  withSetup(async (s) => {
+    const first = await s.pair();
+    first.close();
+    const id = s.store.devices()[0]!.id;
+    const phone = await TestPhone.connect(s.connect().phoneSide, first.keys, first.pcPublicKey);
+    await waitFor(() => s.gateway.onlineDeviceIds().includes(id));
+    assert.equal((await phone.request('GET', '/api/state')).status, 200);
+  }));
+
+test('gateway 版本不兼容的会话：不推事件、不接受 ctl', () =>
+  withSetup(async (s) => {
+    const phone = await s.pair();
+    phone.channel.send({ t: 'version', app: '0.0.1', protocol: 0, minPeer: 1 });
+    const id = s.store.devices()[0]!.id;
+    await waitFor(() => s.gateway.deviceVersion(id).compat === 'phone_outdated');
+    const seen = phone.events.length;
+    const approvals: string[] = [];
+    s.h.kernel.respondApproval = (approvalId: string) => {
+      approvals.push(approvalId);
+      return true;
+    };
+    phone.control({ type: 'approval', id: 'a1', approve: true });
+    s.h.kernel.sendMessage(s.h.threadId, '你好');
+    await waitIdle(s.h);
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(phone.events.length, seen);
+    assert.deepEqual(approvals, []);
+  }));
+
+test('gateway 撤销后不再保留该设备的版本记录', () =>
+  withSetup(async (s) => {
+    const phone = await s.pair();
+    phone.channel.send({ t: 'version', app: '1.2.3', protocol: 1, minPeer: 1 });
+    const id = s.store.devices()[0]!.id;
+    await waitFor(() => s.gateway.deviceVersion(id).appVersion === '1.2.3');
+    await s.gateway.revoke(id);
+    assert.deepEqual(s.gateway.deviceVersion(id), { appVersion: null, compat: 'unknown' });
   }));

@@ -137,7 +137,15 @@ export function PluginInstallDialog({ api, onClose, onInstalled }: { api: Api; o
                 <p className="text-[12px] font-medium text-ink-secondary">{t('plugins.servers')}</p>
                 {preview.servers.map((s) => (
                   <pre key={s.name} className="break-words rounded-lg bg-inset px-3 py-2 font-mono text-[12px] whitespace-pre-wrap">
-                    {s.type === 'stdio' ? s.commandLine : s.url}
+                    {[
+                      s.type === 'stdio' ? s.commandLine : s.url,
+                      s.type === 'stdio' ? `${t('plugins.cwd')}：${s.cwd}` : null,
+                      ...([[t('plugins.env'), s.env], [t('plugins.headers'), s.headers]] as const).map(([label, entries]) =>
+                        entries !== undefined && entries.length > 0 ? `${label}：${entries.map((e) => `${e.name}=${e.value}`).join('，')}` : null,
+                      ),
+                    ]
+                      .filter((line) => line !== null)
+                      .join('\n')}
                   </pre>
                 ))}
               </div>

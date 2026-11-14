@@ -28,6 +28,8 @@ interface ChatChoice {
 }
 
 interface ChatChunk {
+  /** 部分服务在流里用 {"error":{...}} 报告失败 */
+  error?: { message?: unknown } | string | null;
   choices?: ChatChoice[];
   usage?: {
     prompt_tokens?: number;
@@ -140,6 +142,11 @@ async function chatParse(
     }
     if (ev.data.length === 0) continue;
     const chunk = JSON.parse(ev.data) as ChatChunk;
+    if (chunk.error !== undefined && chunk.error !== null) {
+      const detail = typeof chunk.error === 'string' ? chunk.error : chunk.error.message;
+      const message = typeof detail === 'string' && detail.length > 0 ? detail : '模型流式响应失败';
+      throw new ModelError('stream', message, { partial: acc.snapshot() });
+    }
     if (chunk.usage !== undefined && chunk.usage !== null) {
       const cached = chunk.usage.prompt_tokens_details?.cached_tokens ?? chunk.usage.prompt_cache_hit_tokens;
       acc.usage({

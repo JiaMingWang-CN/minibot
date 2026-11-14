@@ -81,6 +81,7 @@ test('service 中继全链路', async () => {
       await waitFor(() => service.status().devices.every((d) => !d.online));
       const again = await TestPhone.connect(await relayCarrier(relay.port, pk), first.keys, pk);
       assert.equal(again.closed, false);
+      await waitFor(() => service.status().devices[0]!.online);
       assert.equal(service.status().devices[0]!.lastVia, 'relay');
       assert.equal(service.status().devices[0]!.online, true);
     });
@@ -286,3 +287,14 @@ test('service 中继停止后，重新开始配对会重试', async () => {
     await relay.close();
   }
 });
+
+test('service 更换 relay token 后旧值不再留在脱敏集合里', () =>
+  withService(async ({ h, service }) => {
+    await service.updateConfig({ relayToken: 'old-relay-token-value' });
+    assert.ok(h.kernel.diag.secrets.containsKnown('old-relay-token-value'));
+    await service.updateConfig({ relayToken: 'new-relay-token-value' });
+    assert.ok(!h.kernel.diag.secrets.containsKnown('old-relay-token-value'));
+    assert.ok(h.kernel.diag.secrets.containsKnown('new-relay-token-value'));
+    await service.updateConfig({ relayToken: null });
+    assert.ok(!h.kernel.diag.secrets.containsKnown('new-relay-token-value'));
+  }));

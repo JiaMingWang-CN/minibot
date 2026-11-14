@@ -36,7 +36,7 @@ test('已挂 opaque 的推理块之后的新推理文字另起一块', () => {
   assert.equal((blocks[1] as { text: string }).text, '第二项摘要');
 });
 
-test('工具参数：分块到达，取结果时才解析；空参数按 {}；解析不出对象的丢弃', () => {
+test('工具参数：分块到达，取结果时才解析；空参数按 {}；解析不出对象的在 partial 里丢弃', () => {
   const acc = new ResultAccumulator(() => {});
   acc.toolStart('a', 'read_file');
   acc.toolArgs('a', '{"path":');

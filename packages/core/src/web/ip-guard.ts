@@ -36,6 +36,7 @@ const V4_BLOCKED: [string, number][] = [
   ['172.16.0.0', 12],
   ['192.0.0.0', 24],
   ['192.0.2.0', 24],
+  ['192.88.99.0', 24],
   ['192.168.0.0', 16],
   ['198.18.0.0', 15],
   ['198.51.100.0', 24],
@@ -102,10 +103,14 @@ function blockedIPv6(value: bigint): boolean {
   if ((top16 & 0xfe00) === 0xfc00) return true;
   // fe80::/10 链路本地
   if ((top16 & 0xffc0) === 0xfe80) return true;
+  // fec0::/10 站点本地（已弃用，仍可能被内网使用）
+  if ((top16 & 0xffc0) === 0xfec0) return true;
   // ff00::/8 组播
   if ((top16 & 0xff00) === 0xff00) return true;
   // 2001:db8::/32 文档地址
   if (value >> 96n === 0x20010db8n) return true;
+  // 2001::/32 Teredo
+  if (value >> 96n === 0x20010000n) return true;
   // 100::/64 仅丢弃
   if (value >> 64n === 0x100n) return true;
   // NAT64（64:ff9b::/96）内嵌 IPv4 按 IPv4 规则判断；本地用途 NAT64（64:ff9b:1::/48）一律拒绝

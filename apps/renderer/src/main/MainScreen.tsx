@@ -164,6 +164,10 @@ export function MainScreen({
     }
   };
 
+  const sendEvent = (message: Parameters<EventConnection['send']>[0]): void => {
+    if (!events.send(message)) setFailure(t('main.eventsOffline'));
+  };
+
   const send = async (): Promise<void> => {
     if (activeId === null) return;
     const text = draft.trim();
@@ -353,7 +357,7 @@ export function MainScreen({
                 value={draft}
                 onChange={setDraft}
                 onSubmit={() => void send()}
-                onStop={() => activeId !== null && events.send({ type: 'abort', threadId: activeId })}
+                onStop={() => activeId !== null && sendEvent({ type: 'abort', threadId: activeId })}
                 running={isRunning}
                 disabled={activeId === null}
                 placeholder={isRunning ? t('main.placeholderRunning') : t('main.placeholder', { name: bot.name })}
@@ -396,7 +400,7 @@ export function MainScreen({
                         request={request}
                         source={`${bot.name} · ${threadTitle(request.threadId)}`}
                         result={request.result}
-                        onRespond={(approve, always) => events.send({ type: 'approval', id: request.id, approve, always })}
+                        onRespond={(approve, always) => sendEvent({ type: 'approval', id: request.id, approve, always })}
                       />
                     ))}
                   </>

@@ -6,7 +6,7 @@ import { decide, decideExternal, isDirectTool, isSimpleCommand, type ToolName } 
 import { CANCELLED_TEXT } from '../db/messages.ts';
 import type { MemoryRevisions } from '../memory/revisions.ts';
 import type { SecretSet } from '../secrets/redact.ts';
-import type { ToolSpec } from '../model/adapter.ts';
+import { INVALID_ARGS_KEY, type ToolSpec } from '../model/adapter.ts';
 import type { Block } from '../model/types.ts';
 import { classifyPath, resolveReal } from './path-guard.ts';
 import type { ReadTracker } from './read-tracker.ts';
@@ -116,6 +116,8 @@ export interface ToolEnv {
   supportsImages?: boolean;
   /** run_command 子进程的环境变量；不给则继承内核进程的环境 */
   childEnv?: NodeJS.ProcessEnv;
+  /** 最新的审批模式（用户中途改了立即对后续工具调用生效）；内核读最新的 bot 配置，不给时用 bot.approvalMode */
+  approvalMode?: () => Promise<Bot['approvalMode']>;
   /** 命令是否在“总是允许”名单里；内核读最新的 bot 配置，不给时用 bot.allowedCommands */
   isCommandAllowed?: (command: string) => Promise<boolean>;
   /** 外部工具是否已在“总是允许”名单里（联网看 allowWeb，MCP 看 allowedMcpTools） */
@@ -124,6 +126,10 @@ export interface ToolEnv {
   onAllowlisted?: (request: ApprovalRequestInput) => void;
   /** 本地日志与诊断事件；不给则不记录 */
   diag?: DiagLog;
+}
+
+async function currentApprovalMode(env: ToolEnv): Promise<Bot['approvalMode']> {
+  return (await env.approvalMode?.()) ?? env.bot.approvalMode;
 }
 
 async function realOrSelf(p: string): Promise<string> {
@@ -318,7 +324,7 @@ async function runExternalTool(
   if (validationError !== null) return fail(validationError);
   if (env.signal.aborted) return fail(CANCELLED_TEXT, 'cancelled');
 
-  if (decideExternal(env.bot.approvalMode, tool.source.kind) === 'ask') {
+  if (decideExternal(await currentApprovalMode(env), tool.source.kind) === 'ask') {
     const request = externalRequest(tool, input, call, env);
     // 内核在 bot.json 路径锁里读最新配置：本轮中途刚勾选的“总是允许”也能生效
     const allowlisted = (await env.isExternalAllowed?.(tool)) ?? false;
@@ -369,6 +375,9 @@ async function runTool(
   try {
     const input = call.input;
     if (!isRecord(input)) return fail('参数错误：input 必须是对象。');
+    if (typeof input[INVALID_ARGS_KEY] === 'string') {
+      return fail('参数错误：工具参数不是合法的 JSON 对象，无法解析。请检查参数格式后重新调用。');
+    }
     if (isDirectTool(call.name)) {
       if (env.signal.aborted) return fail(CANCELLED_TEXT, 'cancelled');
       try {
@@ -407,7 +416,7 @@ async function runTool(
     }
 
     const toolName = call.name as ToolName;
-    if (decide(env.bot.approvalMode, toolName, classes) === 'ask') {
+    if (decide(await currentApprovalMode(env), toolName, classes) === 'ask') {
       const command = call.name === 'run_command' ? (input['command'] as string) : undefined;
       const simple = command !== undefined && isSimpleCommand(command);
       const preview = previewOf(call.name, input, (text) => env.secrets.redact(text));
@@ -415,7 +424,7 @@ async function runTool(
         botId: env.bot.id,
         threadId: env.threadId,
         tool: toolName,
-        summary: summarize(call.name, input, real),
+        summary: env.secrets.redact(summarize(call.name, input, real)),
         ...(command !== undefined ? { command } : {}),
         ...(preview !== undefined ? { preview } : {}),
       };

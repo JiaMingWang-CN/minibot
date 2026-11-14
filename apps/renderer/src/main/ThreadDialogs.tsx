@@ -80,7 +80,7 @@ export function ThreadDialogs({
           aria-label={t('main.renameLabel')}
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && void confirmRename()}
+          onKeyDown={(e) => e.key === 'Enter' && !e.nativeEvent.isComposing && void confirmRename()}
         />
       </Dialog>
 

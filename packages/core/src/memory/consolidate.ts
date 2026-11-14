@@ -129,6 +129,7 @@ export class Consolidator {
   private timer: NodeJS.Timeout | undefined;
   private failed = new Map<string, number>();
   private runningBots = new Set<string>();
+  private runningThreads = new Set<string>();
   private abort = new AbortController();
   private inflight = new Set<Promise<void>>();
 
@@ -183,12 +184,16 @@ export class Consolidator {
 
   async consolidateThread(threadId: string): Promise<void> {
     if (this.abort.signal.aborted) return;
+    // 同一线程已在整理（定时扫描与压缩后触发撞在一起）：不重复调用模型
+    if (this.runningThreads.has(threadId)) return;
+    this.runningThreads.add(threadId);
     const job = this.consolidateOnce(threadId);
     this.inflight.add(job);
     try {
       await job;
     } finally {
       this.inflight.delete(job);
+      this.runningThreads.delete(threadId);
     }
   }
 

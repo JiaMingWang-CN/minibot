@@ -169,7 +169,7 @@ test('压缩摘要请求：历史拼成一条 user 文本消息，不含工具�
   h.add('user', [{ type: 'text', text: '第一轮' }]);
   h.add('assistant', [{ type: 'tool_use', id: 'tu_1', name: 'read_file', input: { path: 'a.txt' } }]);
   h.add('user', [{ type: 'tool_result', toolUseId: 'tu_1', content: '文件内容', status: 'ok' }]);
-  h.add('assistant', [{ type: 'text', text: 'a'.repeat(4000) }]);
+  h.add('assistant', [{ type: 'text', text: 'a'.repeat(1000) }]);
   h.add('user', [{ type: 'text', text: '第二轮' }]);
   await compactThread(h.deps, h.bot, h.threadId, 'auto', new AbortController().signal);
   assert.equal(h.calls.length, 1);

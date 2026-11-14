@@ -274,7 +274,8 @@ export type ClientMessage =
   | { type: 'approval'; id: string; approve: boolean; always?: boolean };
 
 export interface EventConnection {
-  send(message: ClientMessage): void;
+  /** 返回是否已发出；连接未建立（断线重连中）时消息不会排队，返回 false */
+  send(message: ClientMessage): boolean;
   /** 每次连上（含首次和断线重连）时通知；断开期间漏掉的事件要靠它重新同步 */
   onOpen(listener: () => void): () => void;
   close(): void;
@@ -320,7 +321,9 @@ export function connectEvents(conn: Conn, onEvent: (event: KernelEvent) => void)
       return () => openListeners.delete(listener);
     },
     send(message) {
-      if (socket !== null && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
+      if (socket === null || socket.readyState !== WebSocket.OPEN) return false;
+      socket.send(JSON.stringify(message));
+      return true;
     },
     close() {
       stopped = true;

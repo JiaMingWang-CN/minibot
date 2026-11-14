@@ -146,7 +146,14 @@ export async function startOAuthCallback(): Promise<OAuthCallback> {
   let resolveParams: ((params: URLSearchParams) => void) | undefined;
   let rejectParams: ((err: Error) => void) | undefined;
   const server = http.createServer((req, res) => {
-    const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+    let url: URL;
+    try {
+      url = new URL(req.url ?? '/', 'http://127.0.0.1');
+    } catch {
+      res.writeHead(400);
+      res.end();
+      return;
+    }
     if (req.method !== 'GET' || url.pathname !== '/callback') {
       res.writeHead(404);
       res.end();

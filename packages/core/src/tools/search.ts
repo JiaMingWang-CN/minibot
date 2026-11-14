@@ -1,4 +1,5 @@
 import { glob } from 'node:fs/promises';
+import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { rgPath as rgBinary } from '@vscode/ripgrep';
 import { decodeOutput, runProcess } from './process.ts';
@@ -57,15 +58,23 @@ export async function grepFiles(
     '--max-columns',
     '500',
     '--no-require-git',
+    '--with-filename',
   ];
   if (a.ignore_case === true) args.push('-i');
   if (a.glob !== undefined && a.glob.length > 0) args.push('--glob', a.glob);
-  args.push('-e', a.pattern, '.');
+  // path 指向文件时 cwd 不能是文件：改为在所在目录里只搜这个文件
+  let cwd = dir;
+  let target = '.';
+  if ((await fs.stat(dir).catch(() => null))?.isFile() === true) {
+    cwd = path.dirname(dir);
+    target = path.basename(dir);
+  }
+  args.push('-e', a.pattern, '--', target);
 
   const result = await runProcess({
     file: rgPath(),
     args,
-    cwd: dir,
+    cwd,
     timeoutMs: 60_000,
     signal,
   });

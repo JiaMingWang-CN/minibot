@@ -2,7 +2,6 @@ import { randomBytes } from 'node:crypto';
 
 export const PAIR_CODE_PREFIX = 'minibot-pair:';
 export const PAIRING_TTL_MS = 300_000;
-export const MAX_PAIRING_FAILURES = 5;
 
 export interface PairingOffer {
   /** 二维码文本 */
@@ -25,7 +24,6 @@ export interface PairingPayload {
 
 export interface ActiveOffer extends PairingOffer {
   psk: Buffer;
-  failures: number;
 }
 
 export function createOffer(
@@ -44,7 +42,7 @@ export function createOffer(
     port: info.port,
   };
   const code = PAIR_CODE_PREFIX + Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
-  return { code, expiresAt: now + PAIRING_TTL_MS, psk, failures: 0 };
+  return { code, expiresAt: now + PAIRING_TTL_MS, psk };
 }
 
 /** 解析配对码（手机侧 / 测试手机使用） */
